@@ -1,8 +1,9 @@
 """Rejsekort ingestion: encrypted server archive -> interim parquet.
 
 Streams the archive (decrypt -> untar -> CSV) in chunks, keeps only the columns
-and rows we need, and appends each chunk to a parquet file. Nothing decrypted is
-written to disk and the full year is never held in memory.
+and rows we need, and writes each chunk into a parquet dataset partitioned by
+`RejseDato` (one folder per day). Nothing decrypted is written to disk and the
+full year is never held in memory.
 
     uv run python -m msc_thesis.data.rejsekort.ingestion --year 2019
     uv run python -m msc_thesis.data.rejsekort.ingestion --year 2019 --day 2019-03-05
@@ -11,6 +12,7 @@ written to disk and the full year is never held in memory.
 import argparse
 import datetime as dt
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -18,6 +20,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from msc_thesis.utils.fs import publish_dir, tmp_dir_for
 from msc_thesis.utils.logging import get_logger
 from msc_thesis.utils.paths import ENCRYPTED_DIR, INTERIM_DIR, PASS_FILE
 
@@ -51,6 +54,9 @@ SCHEMA = pa.schema(
         ("Model", pa.string()),
         ("turtype", pa.string()),  # trip pattern, e.g. "FiCc"
         ("ModalKomb", pa.string()),
+        # Not used downstream, but kept so cleaning can detect duplicates on the full raw row.
+        ("NyUdførende", pa.string()),
+        ("ProduktFamilie", pa.string()),
         ("turngl", pa.int64()),
         ("Kortnr_Kryp", pa.string()),
         (REGION_COL, pa.string()),
@@ -72,7 +78,7 @@ _REJSEDATO_FORMAT = "%d%b%Y"
 
 def interim_path(year: int, day: dt.date | None = None) -> Path:
     name = f"rejsekort_{day.isoformat()}" if day else f"rejsekort_{year}"
-    return INTERIM_DIR / "rejsekort" / f"{name}.parquet"
+    return INTERIM_DIR / "rejsekort" / name  # parquet dataset, partitioned by RejseDato
 
 
 def _open_stream(archive: Path, pass_file: Path) -> subprocess.Popen:
@@ -98,7 +104,7 @@ def ingest_year(
     pass_file: Path = PASS_FILE,
     out_path: Path | None = None,
 ) -> Path:
-    """Ingest one year's archive into interim parquet; optionally keep one day only.
+    """Ingest one year's archive into an interim parquet dataset; optionally keep one day only.
 
     The archive is a single compressed stream, so `day` still reads the whole file;
     it only shrinks the output (useful for quick end-to-end tests).
@@ -111,7 +117,7 @@ def ingest_year(
 
     out_path = out_path or interim_path(year, day)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = out_path.with_suffix(".parquet.tmp")
+    tmp_path = tmp_dir_for(out_path)
     day_str = day.strftime(_REJSEDATO_FORMAT).upper() if day else None
 
     log.info("Ingesting %s%s -> %s", archive.name, f" (day {day})" if day else "", out_path)
@@ -127,30 +133,36 @@ def ingest_year(
             chunksize=CHUNK_ROWS,
             low_memory=False,
         )
-        with pq.ParquetWriter(tmp_path, SCHEMA, compression="zstd") as writer:
-            for chunk in reader:
-                rows_in += len(chunk)
-                chunk = _filter_chunk(chunk, day_str)
-                rows_out += len(chunk)
-                writer.write_table(pa.Table.from_pandas(chunk, schema=SCHEMA, preserve_index=False))
-                log.info("  read %d rows, kept %d", rows_in, rows_out)
+        for i, chunk in enumerate(reader):
+            rows_in += len(chunk)
+            chunk = _filter_chunk(chunk, day_str)
+            rows_out += len(chunk)
+            if len(chunk):
+                pq.write_to_dataset(
+                    pa.Table.from_pandas(chunk, schema=SCHEMA, preserve_index=False),
+                    tmp_path,
+                    partition_cols=["RejseDato"],
+                    basename_template=f"chunk{i:05d}-{{i}}.parquet",
+                    compression="zstd",
+                )
+            log.info("  read %d rows, kept %d", rows_in, rows_out)
         stderr = proc.stderr.read().decode(errors="replace")
         if proc.wait() != 0:
             raise RuntimeError(f"Decrypt/untar failed (wrong password or corrupt archive?): {stderr}")
     except BaseException as exc:
         proc.kill()
         proc.wait()
-        tmp_path.unlink(missing_ok=True)
+        shutil.rmtree(tmp_path, ignore_errors=True)
         if isinstance(exc, pd.errors.EmptyDataError):
             stderr = proc.stderr.read().decode(errors="replace")
             raise RuntimeError(f"No data from archive (wrong password?): {stderr}") from exc
         raise
 
     if rows_out == 0:
-        tmp_path.unlink(missing_ok=True)
+        shutil.rmtree(tmp_path, ignore_errors=True)
         raise ValueError(f"No rows kept ({rows_in} read). Check REGION_COL/REGION_VALUE and the day format.")
 
-    tmp_path.replace(out_path)
+    publish_dir(tmp_path, out_path)
     log.info("Done: kept %d of %d rows", rows_out, rows_in)
     return out_path
 
