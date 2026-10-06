@@ -1,10 +1,11 @@
 # Config for the zero-shot dataset (see data/builders/zero_shot.py).
 # Target: check-ins and check-outs per station per time step.
-granularity: 5min
-start_date: 2019-01-01
+granularity: 5min             # whole minutes only
+start_date: 2019-01-01        # must be in the same year as end_date
 end_date: 2019-12-31
 station_key: StopPointNr      # neighbouring stops stay separate for now
 count: passengers             # PassagerAntal1+2+3, computed in cleaning
 fill_empty_steps: true        # zero-fill missing (station, step) pairs
-stations: null                # null = all
+station_batch_size: 100       # stations per output partition; lower = less memory
+stations: null                # null = all, or a list of station_key values
 covariates: []
