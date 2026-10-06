@@ -1,0 +1,19 @@
+# Data (sensitive, lives on server)
+/data/
+/outputs/
+
+# Secrets
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# Tooling
+.ipynb_checkpoints/
+.DS_Store
+.pytest_cache/
+.ruff_cache/

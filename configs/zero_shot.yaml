@@ -1,0 +1,7 @@
+# Config for the zero-shot Chronos-2 dataset (see data/builders/zero_shot.py).
+# Fill in once the Chronos-2 input format is decided.
+granularity: null     # e.g. "15min", "1h"
+start_date: null
+end_date: null
+stations: null        # null = all
+covariates: []        # e.g. ["events"]
