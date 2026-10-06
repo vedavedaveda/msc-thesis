@@ -10,6 +10,10 @@ RAW_DIR = DATA_DIR / "raw"
 INTERIM_DIR = DATA_DIR / "interim"
 PROCESSED_DIR = DATA_DIR / "processed"
 
+# Server-side location of the encrypted Rejsekort archives and their password file.
+ENCRYPTED_DIR = Path("/mnt/raid/data_sortedmob/RKD/RawFiles/encrypted")
+PASS_FILE = Path.home() / ".rkd_pass"
+
 
 def processed_dir(experiment: str) -> Path:
     """Output folder for one experiment's model-ready data (created if missing)."""

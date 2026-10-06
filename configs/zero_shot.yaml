@@ -1,7 +1,10 @@
-# Config for the zero-shot Chronos-2 dataset (see data/builders/zero_shot.py).
-# Fill in once the Chronos-2 input format is decided.
-granularity: null     # e.g. "15min", "1h"
-start_date: null
-end_date: null
-stations: null        # null = all
-covariates: []        # e.g. ["events"]
+# Config for the zero-shot dataset (see data/builders/zero_shot.py).
+# Target: check-ins and check-outs per station per time step.
+granularity: 5min
+start_date: 2019-01-01
+end_date: 2019-12-31
+station_key: StopPointNr      # neighbouring stops stay separate for now
+count: passengers             # PassagerAntal1+2+3, computed in cleaning
+fill_empty_steps: true        # zero-fill missing (station, step) pairs
+stations: null                # null = all
+covariates: []
