@@ -145,3 +145,15 @@ def test_cli_overrides_run_end_to_end(tmp_path, monkeypatch, capsys):
     zs.main()
     assert json.loads((d / "metrics.json").read_text())["n_windows"] == 2 * 48 - 12
     assert "MAE" in capsys.readouterr().out
+
+
+def test_native_jit_disabled_by_default_without_overriding_user_setting():
+    import os
+    import subprocess
+    import sys
+
+    code = "import os, msc_thesis.experiments.zero_shot.run; print(os.environ['TORCH_DISABLE_NATIVE_JIT'])"
+    base = {k: v for k, v in os.environ.items() if k != "TORCH_DISABLE_NATIVE_JIT"}
+    run = lambda env: subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True).stdout.strip()
+    assert run(base) == "1"
+    assert run({**base, "TORCH_DISABLE_NATIVE_JIT": "0"}) == "0"

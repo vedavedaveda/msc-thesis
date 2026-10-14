@@ -14,22 +14,28 @@ Reference behaviour kept on purpose (see metrics.py for the metric side):
   * forecast times run from the test start up to (test end - largest horizon), one per stride.
 """
 
-import argparse
-import datetime as dt
-import json
-from pathlib import Path
-from typing import Any, Protocol
+import os
 
-import numpy as np
-import pandas as pd
-import polars as pl
-import yaml
+# torch 2.14 JIT-compiles some CUDA ops with Triton, which needs a C compiler that the server
+# lacks. This switch makes torch use its regular kernels instead; it must be set before torch loads.
+os.environ.setdefault("TORCH_DISABLE_NATIVE_JIT", "1")
 
-from msc_thesis.data.builders.base import Config, load_config
-from msc_thesis.data.builders.zero_shot import EXPERIMENT, window
-from msc_thesis.experiments.zero_shot.metrics import score_forecasts
-from msc_thesis.utils.logging import get_logger
-from msc_thesis.utils.paths import PROCESSED_DIR
+import argparse  # noqa: E402
+import datetime as dt  # noqa: E402
+import json  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any, Protocol  # noqa: E402
+
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+import polars as pl  # noqa: E402
+import yaml  # noqa: E402
+
+from msc_thesis.data.builders.base import Config, load_config  # noqa: E402
+from msc_thesis.data.builders.zero_shot import EXPERIMENT, window  # noqa: E402
+from msc_thesis.experiments.zero_shot.metrics import score_forecasts  # noqa: E402
+from msc_thesis.utils.logging import get_logger  # noqa: E402
+from msc_thesis.utils.paths import PROCESSED_DIR  # noqa: E402
 
 log = get_logger(__name__)
 

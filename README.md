@@ -11,6 +11,7 @@ uv run python -m msc_thesis.experiments.zero_shot.run         # forecast + score
 uv run python -m msc_thesis.experiments.zero_shot.run --set n_test_days=1 --set start_test_day=90
 ```
 
+`run.py` sets `TORCH_DISABLE_NATIVE_JIT=1` (unless already set) because torch's Triton-compiled ops need a C compiler.
 Settings live in `configs/zero_shot.yaml`. Outputs go to `data/processed/zero_shot/<year>/`:
 `forecasts.parquet` (one row per window, horizon and stop; re-score with
 `msc_thesis.experiments.zero_shot.metrics.score_forecasts`) and `metrics.json`.
