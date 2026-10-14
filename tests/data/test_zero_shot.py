@@ -15,6 +15,7 @@ CFG = {
     "stations": None,
     "target": "check_ins",
     "past_covariates": ["check_outs"],
+    "freq": 30,
 }
 
 
@@ -73,6 +74,17 @@ def test_rejects_window_not_fully_covered():
     late = _grid({"a": 1, "b": 3}, n_days=8, start=START + dt.timedelta(days=1))
     with pytest.raises(ValueError, match="not fully covered"):
         to_series_frame(late, CFG)
+
+
+def test_rejects_bins_that_do_not_match_freq():
+    with pytest.raises(ValueError, match="freq is 20 min"):
+        to_series_frame(DENSE, {**CFG, "freq": 20})
+
+
+def test_single_bin_does_not_pass_as_full_coverage():
+    one = DENSE.filter(pl.col("time_idx") == START)
+    with pytest.raises(ValueError, match="not fully covered"):
+        to_series_frame(one, CFG)
 
 
 def test_rejects_irregular_time_steps():

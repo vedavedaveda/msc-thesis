@@ -54,6 +54,12 @@ def series_path(year: int) -> Path:
 
 
 def validate_config(cfg: Config) -> None:
+    for key in ("freq", "prediction_length", "stride_steps"):
+        value = cfg[key]
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ValueError(f"{key} must be a positive integer, got {value!r}")
+    if not cfg["horizons"]:
+        raise ValueError("horizons must list at least one horizon")
     freq, pred_len = cfg["freq"], cfg["prediction_length"]
     bad = [h for h in cfg["horizons"] if h % freq or not 0 < h <= pred_len * freq]
     if bad:
@@ -216,6 +222,7 @@ def write_outputs(forecasts: pl.DataFrame, cfg: Config) -> Path:
 
 
 def run(cfg: Config, pipeline: Pipeline | None = None) -> Path:
+    validate_config(cfg)  # before load_series, which already uses freq
     df = load_series(cfg)
     set_seed(cfg["seed"])
     pipeline = pipeline or load_pipeline(cfg["model_id"])

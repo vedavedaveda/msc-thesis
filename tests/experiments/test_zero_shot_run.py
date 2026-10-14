@@ -117,6 +117,15 @@ def test_horizon_validation():
         zs.validate_config(_small_cfg(horizons=[30, 45]))
     with pytest.raises(ValueError, match="horizons"):
         zs.validate_config(_small_cfg(horizons=[390]))
+    with pytest.raises(ValueError, match="at least one horizon"):
+        zs.validate_config(_small_cfg(horizons=[]))
+
+
+@pytest.mark.parametrize("key", ["freq", "prediction_length", "stride_steps"])
+@pytest.mark.parametrize("value", [0, -1, 1.5, True])
+def test_evaluation_controls_must_be_positive_integers(key, value):
+    with pytest.raises(ValueError, match=f"{key} must be a positive integer"):
+        zs.validate_config(_small_cfg(**{key: value}))
 
 
 def test_outputs_roundtrip_to_identical_summary(tmp_path, monkeypatch):

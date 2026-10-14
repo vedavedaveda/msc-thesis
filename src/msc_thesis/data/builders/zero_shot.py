@@ -114,12 +114,18 @@ def to_series_frame(ts: pl.DataFrame, cfg: Config) -> pl.DataFrame:
     steps = times.diff().drop_nulls().unique()
     if len(steps) > 1:
         raise ValueError(f"Time bins are not regularly spaced; found steps {steps.to_list()}")
+    freq = dt.timedelta(minutes=cfg["freq"])
+    if len(steps) and steps.item() != freq:
+        raise ValueError(
+            f"Time bins are {steps.item()} apart but freq is {cfg['freq']} min. "
+            "Match freq to interval_minutes in configs/stop_timeseries.yaml."
+        )
     if (df.group_by("item_id").len()["len"] != len(times)).any():
         raise ValueError(
             "Series are not on a common dense grid (stops have different numbers of bins). "
             "Rebuild stop_timeseries with dense_output: true."
         )
-    expected = int((end - start) / steps.item()) if len(steps) else 1
+    expected = (end - start) // freq
     if times[0] != start or len(times) != expected:
         raise ValueError(
             f"Window [{start}, {end}) is not fully covered: {len(times)} bins from {times[0]}, "
