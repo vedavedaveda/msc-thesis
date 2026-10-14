@@ -64,6 +64,7 @@ def test_aggregation_is_mean_of_window_rmses_not_pooled():
     assert out["horizons"][30]["RMSE"] == pytest.approx(2.0)          # pooled would be sqrt(7.0)
     assert out["overall"]["RMSE"] == pytest.approx(2.0)
     assert out["n_windows"] == 2
+    assert out["n_forecast_times"] == 2
 
 
 def test_overall_is_mean_over_horizons():
@@ -85,6 +86,24 @@ def test_nan_mape_windows_skipped_and_counted():
     out = score_forecasts(df)
     assert out["horizons"][30]["MAPE"] == pytest.approx(0.5)
     assert out["n_nan_mape_windows"] == 1
+
+
+def test_window_counts_use_the_same_unit():
+    df = pl.concat([_window(T0, h, [0, 0], [1, 1]) for h in (30, 60, 90)])
+    out = score_forecasts(df)
+    assert out["n_forecast_times"] == 1
+    assert out["n_windows"] == 3
+    assert out["n_nan_mape_windows"] == 3   # never more than n_windows
+
+
+def test_horizon_without_defined_mape_is_left_out_of_overall():
+    df = pl.concat([
+        _window(T0, 30, [0, 0], [1, 1]),    # MAPE undefined at every window of horizon 30
+        _window(T0, 60, [2, 2], [1, 1]),    # MAPE 0.5
+    ])
+    out = score_forecasts(df)
+    assert np.isnan(out["horizons"][30]["MAPE"])
+    assert out["overall"]["MAPE"] == pytest.approx(0.5)
 
 
 def test_missing_columns_raise():

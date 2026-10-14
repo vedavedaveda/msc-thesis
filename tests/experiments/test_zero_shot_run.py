@@ -125,13 +125,27 @@ def test_outputs_roundtrip_to_identical_summary(tmp_path, monkeypatch):
     rescored = score_forecasts(pl.read_parquet(out_dir / "forecasts.parquet"))
     for key in ("horizons", "overall"):
         assert json.loads(json.dumps(rescored[key])) == saved[key]
-    assert saved["n_windows"] == 2 * 48 - 12
+    assert saved["n_forecast_times"] == 2 * 48 - 12
+    assert saved["n_windows"] == (2 * 48 - 12) * 12
 
 
 def test_missing_series_error_names_file_and_builder(tmp_path, monkeypatch):
     monkeypatch.setattr(zs, "PROCESSED_DIR", tmp_path)
     with pytest.raises(FileNotFoundError, match=r"series\.parquet.*data\.build zero_shot"):
         zs.load_series(CFG)
+
+
+@pytest.mark.parametrize("cfg", [
+    _small_cfg(start_date=dt.date(2017, 3, 30), n_days=9, start_test_day=7, n_test_days=2),  # context cut
+    _small_cfg(n_days=11, start_test_day=9, n_test_days=2),                               # test runs past data
+])
+def test_series_not_covering_the_config_window_raises(tmp_path, monkeypatch, cfg):
+    monkeypatch.setattr(zs, "PROCESSED_DIR", tmp_path)
+    d = tmp_path / "zero_shot" / "2017"
+    d.mkdir(parents=True)
+    pl.from_pandas(_series()).write_parquet(d / "series.parquet")
+    with pytest.raises(ValueError, match="needs .* Rebuild"):
+        zs.load_series(cfg)
 
 
 def test_run_end_to_end_with_stub(tmp_path, monkeypatch):
@@ -152,7 +166,7 @@ def test_cli_overrides_run_end_to_end(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["run", "--set", "n_days=10", "--set", "start_test_day=8",
                                      "--set", "n_test_days=2"])
     zs.main()
-    assert json.loads((d / "metrics.json").read_text())["n_windows"] == 2 * 48 - 12
+    assert json.loads((d / "metrics.json").read_text())["n_forecast_times"] == 2 * 48 - 12
     assert "MAE" in capsys.readouterr().out
 
 

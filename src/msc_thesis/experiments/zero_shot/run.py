@@ -165,6 +165,16 @@ def load_series(cfg: Config) -> pd.DataFrame:
     steps = df[TIMESTAMP_COLUMN].drop_duplicates().sort_values().diff().dropna().unique()
     if len(steps) != 1 or pd.Timedelta(steps[0]) != pd.Timedelta(minutes=cfg["freq"]):
         raise ValueError(f"Series bins do not match freq={cfg['freq']} min; found steps {list(steps)}")
+    _, test_start, end = window(cfg)
+    need_start = pd.Timestamp(test_start) - pd.Timedelta(minutes=HISTORY_MINUTES)
+    need_end = pd.Timestamp(end) - pd.Timedelta(minutes=cfg["freq"])
+    have_start, have_end = df[TIMESTAMP_COLUMN].min(), df[TIMESTAMP_COLUMN].max()
+    if have_start > need_start or have_end < need_end:
+        raise ValueError(
+            f"{path} covers {have_start} to {have_end}, but this config needs {need_start} to {need_end} "
+            "(one week of context before the test start, through the last test bin). Rebuild it with "
+            "`python -m msc_thesis.data.build zero_shot` using the same start_date and split settings."
+        )
     return df
 
 

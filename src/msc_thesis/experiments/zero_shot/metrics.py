@@ -66,18 +66,22 @@ def aggregate(windows: pl.DataFrame) -> dict:
     """Mean over windows per horizon, then mean over horizons.
 
     Windows with undefined MAPE (all truth zero) are skipped for MAPE only; the reference
-    would propagate NaN. `n_nan_mape_windows` reports how many were skipped.
+    would propagate NaN. A horizon whose windows are all skipped has NaN MAPE and is left
+    out of the overall MAPE. A window is one (forecast_time, horizon) pair, so
+    `n_nan_mape_windows` (skipped) and `n_windows` (scored) count the same unit;
+    `n_forecast_times` is the number of distinct forecast times.
     """
     per_horizon = {}
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN MAPE at a horizon stays NaN
+        warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN MAPE stays NaN
         for horizon, g in windows.group_by("horizon", maintain_order=True):
             per_horizon[int(horizon[0])] = {m: float(np.nanmean(g[m].to_numpy())) for m in METRICS}
-    overall = {m: float(np.mean([v[m] for v in per_horizon.values()])) for m in METRICS}
+        overall = {m: float(np.nanmean([v[m] for v in per_horizon.values()])) for m in METRICS}
     return {
         "horizons": per_horizon,
         "overall": overall,
-        "n_windows": windows["forecast_time"].n_unique(),
+        "n_forecast_times": windows["forecast_time"].n_unique(),
+        "n_windows": len(windows),
         "n_nan_mape_windows": int(windows["MAPE"].is_nan().sum()),
     }
 

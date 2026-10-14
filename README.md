@@ -25,4 +25,6 @@ Reference behaviour that is replicated on purpose, so numbers stay comparable:
 - `IQR_MEAN` is the mean width of the 0.1-0.9 interval, `COVERAGE` the share of truth inside it.
 
 One deliberate difference: windows where MAPE is undefined (all truth zero) are skipped for MAPE
-instead of turning the average into NaN; their count is reported as `n_nan_mape_windows`.
+instead of turning the average into NaN; their count is reported as `n_nan_mape_windows`, next to
+`n_windows` (scored forecast time and horizon pairs) and `n_forecast_times`. A horizon with no defined
+MAPE is left out of the overall MAPE.
