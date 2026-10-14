@@ -1,0 +1,28 @@
+# Config for the stop time-series dataset (see data/rejsekort/stop_timeseries.py).
+# Target: check-ins and check-outs per Rejsekort stop per time step, plus stop locations.
+year: 2017                    # reads the cleaned dataset for this year
+# Optional: stop coordinates, not used by the zero-shot experiment. null = skip stop_locations.parquet.
+gtfs_stops_path: null         # e.g. /mnt/raid/data_sortedmob/RKD/gtfs_dk_2021/stops.txt (match `year`)
+interval_minutes: 30          # positive integer dividing 1440; 30 matches the paper's Citi Bike pick-drop
+# NOTE: passenger counts are only recorded on check-out rows (Co/Cc); Fi/Su/Tr rows carry ~none
+# (checked on 2017-06-19..26: Co ~0.99 passengers/event, Fi sums to ~1.7% of its events), so
+# `passengers` gives near-zero check-ins. Taps are ~1 person each, so `transactions` is used.
+count_mode: transactions      # transactions = event rows; passengers = sum of PassagerAntal for person_type_codes
+# `Model` code -> in | out | ignore (ignore = known code, counted in neither channel).
+# Code meanings (from the data owner):
+#   Fi first check-in | Su transfer check-in | Tr check-in after check-out (Co+Tr = Su)
+#   Co check-out      | Cc cancellation via check-out (no charge, counted as out) | Io unknown
+# No intermediate check-out is inferred for Su transfers; Co+Tr transfers do carry a Co.
+# Set check_type_map_confirmed: true once Io is decided (check its volume in the logged counts).
+check_type_map:
+  Fi: in
+  Su: in
+  Tr: in
+  Co: out
+  Cc: out                     # cancelled trip: counted as a check-out so it balances its Fi
+  Io: ignore                  # meaning unknown; check its volume in the logged code counts
+check_type_map_confirmed: false
+person_type_codes: [1, 2, 4, 5, 7, 8, 9, 10, 18]   # only used when count_mode: passengers
+dense_output: true            # zero-fill every (interval, used stop); false = observed bins only
+start_time: 2017-04-01        # inclusive, naive local time; null = first event date (zero_shot window)
+end_time: 2017-07-01          # exclusive, naive local time; null = day after last event

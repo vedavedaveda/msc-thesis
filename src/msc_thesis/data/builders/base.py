@@ -6,17 +6,10 @@ that directory.
 """
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
-import yaml
+from msc_thesis.utils.yaml_config import Config, load_config
 
-from msc_thesis.utils.paths import CONFIGS_DIR
+__all__ = ["Builder", "Config", "load_config"]
 
-Config = dict[str, Any]
 Builder = Callable[[Config], Path]
-
-
-def load_config(name: str) -> Config:
-    """Load configs/<name>.yaml."""
-    with open(CONFIGS_DIR / f"{name}.yaml") as f:
-        return yaml.safe_load(f)

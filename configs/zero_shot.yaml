@@ -1,11 +1,23 @@
 # Config for the zero-shot dataset (see data/builders/zero_shot.py).
-# Target: check-ins and check-outs per station per time step.
-granularity: 5min             # whole minutes only
-start_date: 2019-01-01        # must be in the same year as end_date
-end_date: 2019-12-31
-station_key: StopPointNr      # neighbouring stops stay separate for now
-count: passengers             # PassagerAntal1+2+3, computed in cleaning
-fill_empty_steps: true        # zero-fill missing (station, step) pairs
-station_batch_size: 100       # stations per output partition; lower = less memory
-stations: null                # null = all, or a list of station_key values
-covariates: []
+# Mirrors the mobility-baselines Chronos-2 Citi Bike setup (conf/dataset/NYC_Citi_Bike_pick-drop.yaml):
+# forecast one channel, pass the other as past covariate.
+# Bin size and the check-in/out definition come from configs/stop_timeseries.yaml (paper: 30 min).
+year: 2017                    # reads data/processed/stop_timeseries/<year>/
+start_date: 2017-04-01        # first day of the window (paper: 2016-04-01)
+n_days: 91                    # window length in days (paper: 91, Apr-Jun)
+start_test_day: 77            # test = days [77, 91), i.e. the last 14 (paper: 63/14/14 train/val/test)
+n_test_days: 14
+n_stations: 250               # busiest stops by pre-test volume (paper: 250 Citi Bike stations)
+stations: null                # explicit list of stop IDs; overrides n_stations
+target: check_ins             # paper: bike_pick
+past_covariates: [check_outs] # paper: bike_drop
+
+# Evaluation (see experiments/zero_shot/run.py). Mirrors Chronos-2-evaluation/conf/dataset/NYC_Citi_Bike_pick-drop.yaml.
+freq: 30                      # minutes per bin; must equal interval_minutes in configs/stop_timeseries.yaml
+prediction_length: 12         # forecast is run for prediction_length + 1 bins (reference quirk, kept)
+horizons: [30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330, 360]   # minutes ahead of the forecast time
+quantile_levels: [0.1, 0.5, 0.9]
+cross_learning: true
+stride_steps: 1               # bins between consecutive forecast times
+seed: 42
+model_id: amazon/chronos-2

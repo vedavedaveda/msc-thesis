@@ -1,6 +1,8 @@
 """Small filesystem helpers."""
 
 import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -16,3 +18,15 @@ def publish_dir(tmp: Path, final: Path) -> None:
     """Replace `final` with the finished `tmp` directory, so readers never see a partial one."""
     shutil.rmtree(final, ignore_errors=True)
     tmp.rename(final)
+
+
+@contextmanager
+def atomic_file(path: Path) -> Iterator[Path]:
+    """Yield a sibling temp path to write; it replaces `path` only if the block succeeds."""
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        yield tmp
+        tmp.replace(path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
