@@ -129,6 +129,20 @@ def test_outputs_roundtrip_to_identical_summary(tmp_path, monkeypatch):
     assert saved["n_windows"] == (2 * 48 - 12) * 12
 
 
+def test_failed_scoring_leaves_previous_outputs_untouched(tmp_path, monkeypatch):
+    monkeypatch.setattr(zs, "PROCESSED_DIR", tmp_path)
+    out_dir = zs.write_outputs(zs.run_windows(StubPipeline(), _series(), _small_cfg()), _small_cfg())
+    before = {p.name: p.read_bytes() for p in out_dir.iterdir()}
+
+    def boom(_):
+        raise RuntimeError("scoring failed")
+
+    monkeypatch.setattr(zs, "score_forecasts", boom)
+    with pytest.raises(RuntimeError):
+        zs.write_outputs(pl.DataFrame({"x": [1]}), _small_cfg())
+    assert {p.name: p.read_bytes() for p in out_dir.iterdir()} == before
+
+
 def test_missing_series_error_names_file_and_builder(tmp_path, monkeypatch):
     monkeypatch.setattr(zs, "PROCESSED_DIR", tmp_path)
     with pytest.raises(FileNotFoundError, match=r"series\.parquet.*data\.build zero_shot"):

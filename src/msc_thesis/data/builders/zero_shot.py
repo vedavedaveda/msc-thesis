@@ -20,6 +20,7 @@ import polars as pl
 
 from msc_thesis.data.builders.base import Config
 from msc_thesis.data.rejsekort.stop_timeseries import stop_timeseries_dir
+from msc_thesis.utils.fs import atomic_file
 from msc_thesis.utils.logging import get_logger
 from msc_thesis.utils.paths import PROCESSED_DIR
 
@@ -54,7 +55,11 @@ def window(cfg: Config) -> tuple[dt.datetime, dt.datetime, dt.datetime]:
 def select_stations(df: pl.DataFrame, cfg: Config, test_start: dt.datetime) -> list[str]:
     """Explicit `stations`, or the `n_stations` busiest stops before the test period."""
     if cfg["stations"] is not None:
-        return [str(s) for s in cfg["stations"]]
+        stations = [str(s) for s in cfg["stations"]]
+        missing = sorted(set(stations) - set(df["item_id"].unique().to_list()))
+        if missing:
+            raise ValueError(f"stations not found in the stop time series window: {missing}")
+        return stations
     ranked = (
         df.filter(pl.col("timestamp") < test_start)
         .group_by("item_id")
@@ -140,7 +145,8 @@ def build_zero_shot(cfg: Config) -> Path:
 
     out_dir = PROCESSED_DIR / EXPERIMENT / str(cfg["year"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(out_dir / "series.parquet", compression="zstd")
+    with atomic_file(out_dir / "series.parquet") as tmp:
+        df.write_parquet(tmp, compression="zstd")
     log.info(
         "Wrote %d rows (%d stops, %d bins) to %s",
         len(df), df["item_id"].n_unique(), df["timestamp"].n_unique(), out_dir / "series.parquet",

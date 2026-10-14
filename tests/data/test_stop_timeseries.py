@@ -10,6 +10,7 @@ from msc_thesis.data.rejsekort.stop_timeseries import (
     bin_events,
     build_stop_locations,
     check_codes,
+    counted_events,
     resolve_bounds,
     validate_config,
     weight_expr,
@@ -105,6 +106,19 @@ def test_passenger_weight_rejects_missing_count_on_configured_slot():
     events = _events([_row("2017-01-01 08:00", 1, "Fi", p1=(1, None))])
     with pytest.raises(ValueError, match="missing or negative"):
         weight_expr(events, "passengers", [1])
+
+
+def test_passenger_validation_ignores_events_that_are_not_counted():
+    cmap = {**CHECK_MAP, "Io": "ignore"}
+    events = _events([
+        _row("2017-01-01 08:00", 1, "Fi", p1=(1, 2)),
+        _row("2017-01-01 08:10", 1, "Io", p1=(1, None)),     # ignored code
+        _row("2017-01-02 08:00", 1, "Fi", p1=(1, None)),     # outside the bounds
+    ])
+    start, end = pd.Timestamp("2017-01-01"), pd.Timestamp("2017-01-02")
+    weight = weight_expr(counted_events(events, cmap, start, end), "passengers", [1])
+    binned = bin_events(events, weight, cmap, 20, start, end)
+    assert binned["check_ins"].sum() == 2
 
 
 def test_bin_events_rejects_missing_stop_id():

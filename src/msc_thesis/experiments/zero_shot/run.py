@@ -34,6 +34,7 @@ import yaml  # noqa: E402
 from msc_thesis.data.builders.base import Config, load_config  # noqa: E402
 from msc_thesis.data.builders.zero_shot import EXPERIMENT, window  # noqa: E402
 from msc_thesis.experiments.zero_shot.metrics import score_forecasts  # noqa: E402
+from msc_thesis.utils.fs import atomic_file  # noqa: E402
 from msc_thesis.utils.logging import get_logger  # noqa: E402
 from msc_thesis.utils.paths import PROCESSED_DIR  # noqa: E402
 
@@ -188,9 +189,11 @@ def load_pipeline(model_id: str) -> Pipeline:
 def write_outputs(forecasts: pl.DataFrame, cfg: Config) -> Path:
     out_dir = PROCESSED_DIR / EXPERIMENT / str(cfg["year"])
     out_dir.mkdir(parents=True, exist_ok=True)
-    forecasts.write_parquet(out_dir / "forecasts.parquet", compression="zstd")
-    summary = {"config": cfg, **score_forecasts(forecasts)}
-    (out_dir / "metrics.json").write_text(json.dumps(summary, indent=2, default=str))
+    # Score before touching the outputs, so a failed run leaves the previous pair intact.
+    summary = json.dumps({"config": cfg, **score_forecasts(forecasts)}, indent=2, default=str)
+    with atomic_file(out_dir / "forecasts.parquet") as fc_tmp, atomic_file(out_dir / "metrics.json") as m_tmp:
+        forecasts.write_parquet(fc_tmp, compression="zstd")
+        m_tmp.write_text(summary)
     return out_dir
 
 

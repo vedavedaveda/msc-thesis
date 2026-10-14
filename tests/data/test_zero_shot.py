@@ -53,6 +53,11 @@ def test_explicit_stations_override_n_stations():
     assert df["item_id"].unique().to_list() == ["a"]
 
 
+def test_explicit_stations_must_exist():
+    with pytest.raises(ValueError, match=r"stations not found.*'zz'"):
+        to_series_frame(DENSE, {**CFG, "stations": ["a", "zz"]})
+
+
 def test_target_and_covariate_can_be_swapped():
     df = to_series_frame(DENSE, {**CFG, "target": "check_outs", "past_covariates": ["check_ins"]})
     assert df.columns == ["item_id", "timestamp", "check_outs", "check_ins"]
@@ -93,7 +98,7 @@ def test_window_requires_context_and_consistent_split():
 
 def test_empty_selection_raises():
     with pytest.raises(ValueError, match="No rows left"):
-        to_series_frame(DENSE, {**CFG, "stations": ["zzz"]})
+        to_series_frame(_grid({"a": 1}, start=START + dt.timedelta(days=20)), CFG)   # no data in window
 
 
 def test_low_activity_days_flags_outage():

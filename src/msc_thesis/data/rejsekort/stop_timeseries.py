@@ -136,6 +136,17 @@ def resolve_bounds(
     return start_time, end_time
 
 
+def counted_events(
+    events: pl.LazyFrame, check_type_map: dict[str, str], start_time: pd.Timestamp, end_time: pd.Timestamp
+) -> pl.LazyFrame:
+    """Events inside [start_time, end_time) whose code is not mapped to "ignore"."""
+    return events.filter(
+        (pl.col("event_time") >= start_time.to_pydatetime())
+        & (pl.col("event_time") < end_time.to_pydatetime())
+        & pl.col("Model").replace_strict(check_type_map).ne("ignore")
+    )
+
+
 def bin_events(
     events: pl.LazyFrame,
     weight: pl.Expr,
@@ -152,11 +163,7 @@ def bin_events(
         raise ValueError(f"{invalid} events lack timestamps or stop IDs")
 
     binned = (
-        events.filter(
-            (pl.col("event_time") >= start_time.to_pydatetime())
-            & (pl.col("event_time") < end_time.to_pydatetime())
-            & pl.col("Model").replace_strict(check_type_map).ne("ignore")
-        )
+        counted_events(events, check_type_map, start_time, end_time)
         .with_columns(
             pl.col("StopPointNr").cast(pl.String).alias("stop_id"),
             pl.col("event_time").dt.truncate(f"{interval_minutes}m").alias("time_idx"),
@@ -275,8 +282,10 @@ def build_stop_timeseries(cfg: Config, input_path: Path | None = None, out_dir: 
     ignored = code_counts.filter(pl.col("Model").replace_strict(cfg["check_type_map"]) == "ignore")
     if len(ignored):
         log.info("Ignored (not counted as in or out):\n%s", ignored)
-    weight = weight_expr(events, cfg["count_mode"], cfg["person_type_codes"])
     start_time, end_time = resolve_bounds(events, cfg["start_time"], cfg["end_time"], interval)
+    # Validate person counts only on the events that will actually be counted.
+    counted = counted_events(events, cfg["check_type_map"], start_time, end_time)
+    weight = weight_expr(counted, cfg["count_mode"], cfg["person_type_codes"])
 
     binned = bin_events(events, weight, cfg["check_type_map"], interval, start_time, end_time)
     stop_ids = sorted(binned["stop_id"].unique())
