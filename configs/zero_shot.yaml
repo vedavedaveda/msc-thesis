@@ -11,3 +11,13 @@ n_stations: 250               # busiest stops by pre-test volume (paper: 250 Cit
 stations: null                # explicit list of stop IDs; overrides n_stations
 target: check_ins             # paper: bike_pick
 past_covariates: [check_outs] # paper: bike_drop
+
+# Evaluation (see experiments/zero_shot/run.py). Mirrors Chronos-2-evaluation/conf/dataset/NYC_Citi_Bike_pick-drop.yaml.
+freq: 30                      # minutes per bin; must equal interval_minutes in configs/stop_timeseries.yaml
+prediction_length: 12         # forecast is run for prediction_length + 1 bins (reference quirk, kept)
+horizons: [30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330, 360]   # minutes ahead of the forecast time
+quantile_levels: [0.1, 0.5, 0.9]
+cross_learning: true
+stride_steps: 1               # bins between consecutive forecast times
+seed: 42
+model_id: amazon/chronos-2
