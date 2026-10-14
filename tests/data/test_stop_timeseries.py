@@ -178,3 +178,10 @@ def test_build_without_gtfs_skips_stop_locations(tmp_path, monkeypatch):
     out_dir = stop_timeseries.build_stop_timeseries(cfg, clean)
     assert (out_dir / "stop_timeseries.parquet").exists()
     assert not (out_dir / "stop_locations.parquet").exists()
+
+
+def test_span_runs_do_not_share_the_full_year_output_dir():
+    full = stop_timeseries.stop_timeseries_dir(2017)
+    assert full.name == "2017"
+    assert stop_timeseries.stop_timeseries_dir(2017, dt.date(2017, 6, 19), dt.date(2017, 6, 26)) != full
+    assert stop_timeseries.stop_timeseries_dir(2017, dt.date(2017, 6, 19)).name == "2017-06-19"

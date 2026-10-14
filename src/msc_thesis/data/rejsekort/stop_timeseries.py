@@ -23,8 +23,9 @@ Assumptions (see configs/stop_timeseries.yaml):
     uv run python -m msc_thesis.data.rejsekort.stop_timeseries --year 2017
     uv run python -m msc_thesis.data.rejsekort.stop_timeseries --year 2017 --start 2017-06-19 --end 2017-06-26
 
-`--day` / `--start --end` read the matching partial clean (see cleaning.py) and set
-`start_time` / `end_time` to cover exactly those days.
+`--day` / `--start --end` read the matching partial clean (see cleaning.py), set
+`start_time` / `end_time` to cover exactly those days, and write to
+data/processed/stop_timeseries/<span>/ so the full-year output is left alone.
 """
 
 import argparse
@@ -39,7 +40,7 @@ import pyarrow.parquet as pq
 import yaml
 
 from msc_thesis.data.rejsekort.cleaning import clean_path
-from msc_thesis.data.rejsekort.ingestion import add_span_args, parse_span
+from msc_thesis.data.rejsekort.ingestion import add_span_args, parse_span, span_name
 from msc_thesis.utils.logging import get_logger
 from msc_thesis.utils.paths import CONFIGS_DIR, PROCESSED_DIR
 
@@ -256,8 +257,8 @@ def write_timeseries(
     return rows, {k: int(v) for k, v in written.items()}
 
 
-def build_stop_timeseries(cfg: Config, input_path: Path | None = None) -> Path:
-    """`input_path` defaults to the full-year clean for `cfg["year"]`."""
+def build_stop_timeseries(cfg: Config, input_path: Path | None = None, out_dir: Path | None = None) -> Path:
+    """`input_path` defaults to the full-year clean and `out_dir` to the full-year output for `cfg["year"]`."""
     validate_config(cfg)
     year = cfg["year"]
     interval = cfg["interval_minutes"]
@@ -284,7 +285,7 @@ def build_stop_timeseries(cfg: Config, input_path: Path | None = None) -> Path:
     gtfs_stops_path = cfg.get("gtfs_stops_path")
     stop_locations = build_stop_locations(stop_ids, Path(gtfs_stops_path)) if gtfs_stops_path else None
 
-    out_dir = stop_timeseries_dir(year)
+    out_dir = out_dir or stop_timeseries_dir(year)
     out_dir.mkdir(parents=True, exist_ok=True)
     timeseries_path = out_dir / "stop_timeseries.parquet"
     locations_path = out_dir / "stop_locations.parquet"
@@ -302,9 +303,9 @@ def build_stop_timeseries(cfg: Config, input_path: Path | None = None) -> Path:
     return out_dir
 
 
-def stop_timeseries_dir(year: int) -> Path:
-    """Where `build_stop_timeseries` writes for `year`; experiment builders read from here."""
-    return PROCESSED_DIR / OUTPUT_NAME / str(year)
+def stop_timeseries_dir(year: int, start: dt.date | None = None, end: dt.date | None = None) -> Path:
+    """Where `build_stop_timeseries` writes for a year or day span; experiment builders read the year."""
+    return PROCESSED_DIR / OUTPUT_NAME / span_name(year, start, end)
 
 
 def load_config() -> Config:
@@ -333,7 +334,7 @@ def main() -> None:
     if start is not None:
         input_path = clean_path(cfg["year"], start, end)
         cfg["start_time"], cfg["end_time"] = start, end + dt.timedelta(days=1)
-    out_dir = build_stop_timeseries(cfg, input_path)
+    out_dir = build_stop_timeseries(cfg, input_path, stop_timeseries_dir(cfg["year"], start, end))
     log.info("Wrote stop time series to %s", out_dir)
 
 

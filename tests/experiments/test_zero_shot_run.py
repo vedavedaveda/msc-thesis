@@ -72,6 +72,15 @@ def test_default_config_has_660_windows():
     assert times[-1] + pd.Timedelta(minutes=360) == pd.Timestamp("2017-07-01") - pd.Timedelta(minutes=30)
 
 
+def test_stride_keeps_last_window_that_fits():
+    # 19,770 min between test start and the last valid forecast time is 94 strides of 210 min
+    # (94 * 210 = 19,740), so with stride_steps=7 the windows are k = 0..94.
+    times = zs.forecast_times({**CFG, "stride_steps": 7})
+    assert len(times) == 95
+    assert times[-1] + pd.Timedelta(minutes=360) <= pd.Timestamp("2017-07-01") - pd.Timedelta(minutes=30)
+    assert times[-1] + pd.Timedelta(minutes=210 + 360) > pd.Timestamp("2017-07-01") - pd.Timedelta(minutes=30)
+
+
 def test_context_is_previous_week_strictly_before_forecast_time():
     df, t = _series(), pd.Timestamp("2017-04-09")
     ctx = zs.context_slice(df, t, ["item_id", "timestamp", "check_ins", "check_outs"])

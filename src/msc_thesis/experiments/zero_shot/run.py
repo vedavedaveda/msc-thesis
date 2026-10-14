@@ -69,7 +69,9 @@ def forecast_times(cfg: Config) -> list[pd.Timestamp]:
     """Forecast times: test start, then every stride, while the largest horizon stays inside the test period."""
     _, test_start, end = window(cfg)
     freq, stride = cfg["freq"], cfg["stride_steps"]
-    n = int((end - test_start - dt.timedelta(minutes=max(cfg["horizons"]))) / dt.timedelta(minutes=stride * freq))
+    # the last scored bin starts at t + max horizon and must start before end - freq
+    last = end - test_start - dt.timedelta(minutes=freq + max(cfg["horizons"]))
+    n = last // dt.timedelta(minutes=stride * freq) + 1
     return [pd.Timestamp(test_start) + pd.Timedelta(minutes=k * stride * freq) for k in range(n)]
 
 
