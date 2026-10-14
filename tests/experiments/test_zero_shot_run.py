@@ -82,11 +82,13 @@ def test_stride_keeps_last_window_that_fits():
 
 
 def test_context_is_previous_week_strictly_before_forecast_time():
-    df, t = _series(), pd.Timestamp("2017-04-09")
+    df, t = zs.sort_by_time(_series()), pd.Timestamp("2017-04-09")
     ctx = zs.context_slice(df, t, ["item_id", "timestamp", "check_ins", "check_outs"])
     assert ctx["timestamp"].max() < t
     assert ctx["timestamp"].min() == t - pd.Timedelta(days=7)
     assert len(ctx) == 2 * 7 * 48
+    assert ctx["item_id"].is_monotonic_increasing                     # one contiguous block per item
+    assert ctx.groupby("item_id")["timestamp"].apply(lambda s: s.is_monotonic_increasing).all()
 
 
 def test_horizon_alignment_and_call_arguments():

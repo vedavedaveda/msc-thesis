@@ -29,7 +29,6 @@ from typing import Any, Protocol  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import polars as pl  # noqa: E402
-import yaml  # noqa: E402
 
 from msc_thesis.data.builders.base import Config, load_config  # noqa: E402
 from msc_thesis.data.builders.zero_shot import EXPERIMENT, window  # noqa: E402
@@ -37,6 +36,7 @@ from msc_thesis.experiments.zero_shot.metrics import score_forecasts  # noqa: E4
 from msc_thesis.utils.fs import atomic_file  # noqa: E402
 from msc_thesis.utils.logging import get_logger  # noqa: E402
 from msc_thesis.utils.paths import PROCESSED_DIR  # noqa: E402
+from msc_thesis.utils.yaml_config import add_override_arg, apply_overrides  # noqa: E402
 
 log = get_logger(__name__)
 
@@ -76,11 +76,25 @@ def forecast_times(cfg: Config) -> list[pd.Timestamp]:
     return [pd.Timestamp(test_start) + pd.Timedelta(minutes=k * stride * freq) for k in range(n)]
 
 
+def sort_by_time(df: pd.DataFrame) -> pd.DataFrame:
+    """Order rows by timestamp so time ranges can be located with a binary search."""
+    return df.sort_values([TIMESTAMP_COLUMN, ID_COLUMN], kind="stable", ignore_index=True)
+
+
+def rows_between(df: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
+    """Rows with start <= timestamp < end of a frame from `sort_by_time`, without scanning it."""
+    lo, hi = df[TIMESTAMP_COLUMN].searchsorted([start, end])
+    return df.iloc[lo:hi]
+
+
 def context_slice(df: pd.DataFrame, t: pd.Timestamp, columns: list[str]) -> pd.DataFrame:
-    """Rows in [t - 7 days, t): target and past covariates only, nothing at or after t."""
+    """Rows in [t - 7 days, t) of a frame from `sort_by_time`, one block per item.
+
+    Target and past covariates only, nothing at or after t.
+    """
     start = t - pd.Timedelta(minutes=HISTORY_MINUTES)
-    ts = df[TIMESTAMP_COLUMN]
-    return df.loc[(ts >= start) & (ts < t), columns].copy()
+    ctx = rows_between(df, start, t)[columns]
+    return ctx.sort_values([ID_COLUMN, TIMESTAMP_COLUMN], kind="stable", ignore_index=True)
 
 
 def _quantile_column(forecast: pd.DataFrame, q: float) -> str:
@@ -94,7 +108,10 @@ def _quantile_column(forecast: pd.DataFrame, q: float) -> str:
 
 
 def window_rows(forecast: pd.DataFrame, df: pd.DataFrame, t: pd.Timestamp, cfg: Config) -> pl.DataFrame:
-    """Scored rows of one forecast: one block per horizon, joined with the truth at t + h."""
+    """Scored rows of one forecast: one block per horizon, joined with the truth at t + h.
+
+    `df` must come from `sort_by_time`.
+    """
     target = cfg["target"]
     if "target_name" in forecast.columns:
         forecast = forecast[forecast["target_name"] == target]
@@ -102,7 +119,7 @@ def window_rows(forecast: pd.DataFrame, df: pd.DataFrame, t: pd.Timestamp, cfg: 
     blocks = []
     for h in cfg["horizons"]:
         ts = t + pd.Timedelta(minutes=h)
-        truth = df.loc[df[TIMESTAMP_COLUMN] == ts, [ID_COLUMN, target]]
+        truth = rows_between(df, ts, ts + pd.Timedelta(minutes=cfg["freq"]))[[ID_COLUMN, target]]
         merged = truth.merge(
             forecast.loc[forecast[TIMESTAMP_COLUMN] == ts, [ID_COLUMN, "predictions", low_col, high_col]],
             on=ID_COLUMN,
@@ -128,6 +145,7 @@ def run_windows(pipeline: Pipeline, df: pd.DataFrame, cfg: Config) -> pl.DataFra
     validate_config(cfg)
     target = cfg["target"]
     columns = [ID_COLUMN, TIMESTAMP_COLUMN, target, *cfg["past_covariates"]]
+    df = sort_by_time(df)
     times = forecast_times(cfg)
     log.info("Forecasting %d windows, horizons %s min", len(times), cfg["horizons"])
     out = []
@@ -208,15 +226,10 @@ def run(cfg: Config, pipeline: Pipeline | None = None) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+    add_override_arg(parser)
     args = parser.parse_args()
 
-    cfg = load_config("zero_shot")
-    for item in args.overrides:
-        key, sep, value = item.partition("=")
-        if not sep or key not in cfg:
-            parser.error(f"--set expects KEY=VALUE with a key from the config ({sorted(cfg)}), got {item!r}")
-        cfg[key] = yaml.safe_load(value)
+    cfg = apply_overrides(parser, load_config("zero_shot"), args.overrides)
 
     out_dir = run(cfg)
     metrics = json.loads((out_dir / "metrics.json").read_text())

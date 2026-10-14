@@ -8,24 +8,18 @@
 
 import argparse
 
-import yaml
-
 from msc_thesis.data.builders import REGISTRY
 from msc_thesis.data.builders.base import load_config
+from msc_thesis.utils.yaml_config import add_override_arg, apply_overrides
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("experiment", choices=sorted(REGISTRY))
-    parser.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE")
+    add_override_arg(parser)
     args = parser.parse_args()
 
-    cfg = load_config(args.experiment)
-    for item in args.overrides:
-        key, sep, value = item.partition("=")
-        if not sep or key not in cfg:
-            parser.error(f"--set expects KEY=VALUE with a key from the config ({sorted(cfg)}), got {item!r}")
-        cfg[key] = yaml.safe_load(value)
+    cfg = apply_overrides(parser, load_config(args.experiment), args.overrides)
 
     out_dir = REGISTRY[args.experiment](cfg)
     print(f"Wrote {args.experiment} data to {out_dir}")

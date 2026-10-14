@@ -31,22 +31,25 @@ data/processed/stop_timeseries/<span>/ so the full-year output is left alone.
 import argparse
 import datetime as dt
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
-import yaml
 
 from msc_thesis.data.rejsekort.cleaning import clean_path
 from msc_thesis.data.rejsekort.ingestion import add_span_args, parse_span, span_name
+from msc_thesis.utils.fs import atomic_file
 from msc_thesis.utils.logging import get_logger
-from msc_thesis.utils.paths import CONFIGS_DIR, PROCESSED_DIR
+from msc_thesis.utils.paths import PROCESSED_DIR
+from msc_thesis.utils.yaml_config import (
+    Config,
+    add_override_arg,
+    apply_overrides,
+    load_config,
+)
 
 log = get_logger(__name__)
-
-Config = dict[str, Any]
 
 CONFIG_NAME = "stop_timeseries"
 OUTPUT_NAME = "stop_timeseries"
@@ -74,9 +77,22 @@ def validate_config(cfg: Config) -> None:
         raise ValueError("check_type_map values must be 'in', 'out' or 'ignore'")
 
 
-def check_codes(events: pl.LazyFrame, check_type_map: dict[str, str], confirmed: bool) -> pl.DataFrame:
+def profile_events(events: pl.LazyFrame) -> pl.DataFrame:
+    """One pass over the raw events: per `Model` code, the event count, time span and missing keys.
+
+    `check_codes`, `check_keys` and `resolve_bounds` all read this instead of rescanning.
+    """
+    return events.group_by("Model").agg(
+        pl.len().alias("events"),
+        pl.col("event_time").min().alias("first"),
+        pl.col("event_time").max().alias("last"),
+        (pl.col("event_time").is_null() | pl.col("StopPointNr").is_null()).sum().alias("missing_keys"),
+    ).collect().sort("Model")
+
+
+def check_codes(profile: pl.DataFrame, check_type_map: dict[str, str], confirmed: bool) -> pl.DataFrame:
     """Event count per `Model` code; raise on unmapped codes or an unconfirmed map."""
-    code_counts = events.group_by("Model").agg(pl.len().alias("events")).collect().sort("Model")
+    code_counts = profile.select("Model", "events")
     unknown = [code for code in code_counts["Model"].to_list() if code not in check_type_map]
     if unknown:
         raise ValueError(f"Unmapped Model codes: {unknown}. Verify and update check_type_map.")
@@ -113,21 +129,22 @@ def weight_expr(events: pl.LazyFrame, count_mode: str, person_type_codes: list[i
     ])
 
 
+def check_keys(profile: pl.DataFrame) -> None:
+    """Raise if any event lacks a timestamp or stop ID."""
+    invalid = int(profile["missing_keys"].sum())
+    if invalid:
+        raise ValueError(f"{invalid} events lack timestamps or stop IDs")
+
+
 def resolve_bounds(
-    events: pl.LazyFrame, start: object, end: object, interval_minutes: int
+    profile: pl.DataFrame, start: object, end: object, interval_minutes: int
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
     """Half-open [start, end) window; defaults cover the full event-date span."""
-    bounds = events.select(
-        pl.col("event_time").min().alias("first"),
-        pl.col("event_time").max().alias("last"),
-    ).collect().row(0, named=True)
-    if bounds["first"] is None:
+    first, last = profile["first"].min(), profile["last"].max()
+    if first is None:
         raise ValueError("The input dataset is empty")
-    start_time = pd.Timestamp(start) if start is not None else pd.Timestamp(bounds["first"]).normalize()
-    end_time = (
-        pd.Timestamp(end) if end is not None
-        else pd.Timestamp(bounds["last"]).normalize() + pd.Timedelta(days=1)
-    )
+    start_time = pd.Timestamp(start) if start is not None else pd.Timestamp(first).normalize()
+    end_time = pd.Timestamp(end) if end is not None else pd.Timestamp(last).normalize() + pd.Timedelta(days=1)
     if start_time.tzinfo is not None or end_time.tzinfo is not None:
         raise ValueError("Use timezone-naive bounds matching the cleaned timestamps")
     freq = f"{interval_minutes}min"
@@ -139,11 +156,14 @@ def resolve_bounds(
 def counted_events(
     events: pl.LazyFrame, check_type_map: dict[str, str], start_time: pd.Timestamp, end_time: pd.Timestamp
 ) -> pl.LazyFrame:
-    """Events inside [start_time, end_time) whose code is not mapped to "ignore"."""
-    return events.filter(
-        (pl.col("event_time") >= start_time.to_pydatetime())
-        & (pl.col("event_time") < end_time.to_pydatetime())
-        & pl.col("Model").replace_strict(check_type_map).ne("ignore")
+    """Events inside [start_time, end_time) whose code is not mapped to "ignore", with their `check_type`."""
+    return (
+        events.filter(
+            (pl.col("event_time") >= start_time.to_pydatetime())
+            & (pl.col("event_time") < end_time.to_pydatetime())
+        )
+        .with_columns(pl.col("Model").replace_strict(check_type_map).alias("check_type"))
+        .filter(pl.col("check_type") != "ignore")
     )
 
 
@@ -155,19 +175,15 @@ def bin_events(
     start_time: pd.Timestamp,
     end_time: pd.Timestamp,
 ) -> pd.DataFrame:
-    """Sparse (time_idx, stop_id) -> check_ins, check_outs for the observed bins."""
-    invalid = events.filter(
-        pl.col("event_time").is_null() | pl.col("StopPointNr").is_null()
-    ).select(pl.len()).collect().item()
-    if invalid:
-        raise ValueError(f"{invalid} events lack timestamps or stop IDs")
+    """Sparse (time_idx, stop_id) -> check_ins, check_outs for the observed bins.
 
+    Assumes `check_keys` passed: every event has a timestamp and stop ID.
+    """
     binned = (
         counted_events(events, check_type_map, start_time, end_time)
         .with_columns(
             pl.col("StopPointNr").cast(pl.String).alias("stop_id"),
             pl.col("event_time").dt.truncate(f"{interval_minutes}m").alias("time_idx"),
-            pl.col("Model").replace_strict(check_type_map).alias("check_type"),
             weight.cast(pl.Int64).alias("weight"),
         )
         .group_by("time_idx", "stop_id")
@@ -233,11 +249,10 @@ def write_timeseries(
 ) -> tuple[int, dict[str, int]]:
     """Write one day at a time; returns (rows written, written totals)."""
     freq = f"{interval_minutes}min"
-    tmp = path.with_name(path.stem + ".partial.parquet")
     expected = binned[["check_ins", "check_outs"]].sum().astype("int64")
     written = pd.Series({"check_ins": 0, "check_outs": 0}, dtype="int64")
     rows = 0
-    try:
+    with atomic_file(path) as tmp:
         with pq.ParquetWriter(tmp, OUTPUT_SCHEMA, compression="zstd") as writer:
             for date in pd.date_range(start_time.normalize(), end_time, freq="1D", inclusive="left"):
                 day_start = max(date, start_time)
@@ -257,10 +272,6 @@ def write_timeseries(
                 written += day[["check_ins", "check_outs"]].sum()
         if not written.equals(expected):
             raise AssertionError("Export changed the aggregated counts")
-        tmp.replace(path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
     return rows, {k: int(v) for k, v in written.items()}
 
 
@@ -277,12 +288,14 @@ def build_stop_timeseries(cfg: Config, input_path: Path | None = None, out_dir: 
         raise ValueError("No input Parquet files found")
 
     events = pl.scan_parquet(files)
-    code_counts = check_codes(events, cfg["check_type_map"], cfg["check_type_map_confirmed"])
+    profile = profile_events(events)
+    code_counts = check_codes(profile, cfg["check_type_map"], cfg["check_type_map_confirmed"])
     log.info("Model code counts:\n%s", code_counts)
     ignored = code_counts.filter(pl.col("Model").replace_strict(cfg["check_type_map"]) == "ignore")
     if len(ignored):
         log.info("Ignored (not counted as in or out):\n%s", ignored)
-    start_time, end_time = resolve_bounds(events, cfg["start_time"], cfg["end_time"], interval)
+    check_keys(profile)
+    start_time, end_time = resolve_bounds(profile, cfg["start_time"], cfg["end_time"], interval)
     # Validate person counts only on the events that will actually be counted.
     counted = counted_events(events, cfg["check_type_map"], start_time, end_time)
     weight = weight_expr(counted, cfg["count_mode"], cfg["person_type_codes"])
@@ -317,27 +330,17 @@ def stop_timeseries_dir(year: int, start: dt.date | None = None, end: dt.date | 
     return PROCESSED_DIR / OUTPUT_NAME / span_name(year, start, end)
 
 
-def load_config() -> Config:
-    with open(CONFIGS_DIR / f"{CONFIG_NAME}.yaml") as f:
-        return yaml.safe_load(f)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--year", type=int, help="overrides `year` in the config")
     add_span_args(parser)
-    parser.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE",
-                        help="override a config entry; VALUE is parsed as YAML")
+    add_override_arg(parser)
     args = parser.parse_args()
 
-    cfg = load_config()
+    cfg = load_config(CONFIG_NAME)
     if args.year is not None:
         cfg["year"] = args.year
-    for item in args.overrides:
-        key, sep, value = item.partition("=")
-        if not sep or key not in cfg:
-            parser.error(f"--set expects KEY=VALUE with a key from the config ({sorted(cfg)}), got {item!r}")
-        cfg[key] = yaml.safe_load(value)
+    apply_overrides(parser, cfg, args.overrides)
     start, end = parse_span(parser, args)
     input_path = None
     if start is not None:

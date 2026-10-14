@@ -10,7 +10,9 @@ from msc_thesis.data.rejsekort.stop_timeseries import (
     bin_events,
     build_stop_locations,
     check_codes,
+    check_keys,
     counted_events,
+    profile_events,
     resolve_bounds,
     validate_config,
     weight_expr,
@@ -53,13 +55,13 @@ def test_validate_config_rejects_bad_map_values():
 def test_check_codes_rejects_unmapped_code():
     events = _events([_row("2017-01-01 08:00", 1, "Xx")])
     with pytest.raises(ValueError, match="Unmapped Model codes"):
-        check_codes(events, CHECK_MAP, confirmed=True)
+        check_codes(profile_events(events), CHECK_MAP, confirmed=True)
 
 
 def test_check_codes_requires_confirmation():
     events = _events([_row("2017-01-01 08:00", 1, "Fi")])
     with pytest.raises(ValueError, match="check_type_map_confirmed"):
-        check_codes(events, CHECK_MAP, confirmed=False)
+        check_codes(profile_events(events), CHECK_MAP, confirmed=False)
 
 
 def test_bins_are_left_closed_and_sum_in_and_out():
@@ -69,7 +71,7 @@ def test_bins_are_left_closed_and_sum_in_and_out():
         _row("2017-01-01 08:19", 1, "Co"),
         _row("2017-01-01 08:20", 1, "Fi"),  # next bin
     ])
-    start, end = resolve_bounds(events, None, None, 20)
+    start, end = resolve_bounds(profile_events(events), None, None, 20)
     binned = bin_events(events, weight_expr(events, "transactions", []), CHECK_MAP, 20, start, end)
     first, second = binned.to_dict("records")
     assert (first["time_idx"], first["check_ins"], first["check_outs"]) == (
@@ -87,7 +89,7 @@ def test_ignored_codes_count_in_neither_channel_and_create_no_bins():
         _row("2017-01-01 09:00", 2, "Cc"),  # stop 2 only ever sees ignored events
     ])
     cmap = {**CHECK_MAP, "Cc": "ignore"}
-    start, end = resolve_bounds(events, None, None, 20)
+    start, end = resolve_bounds(profile_events(events), None, None, 20)
     binned = bin_events(events, weight_expr(events, "transactions", []), cmap, 20, start, end)
     assert binned[["stop_id", "check_ins", "check_outs"]].to_dict("records") == [
         {"stop_id": "1", "check_ins": 1, "check_outs": 0}
@@ -96,7 +98,7 @@ def test_ignored_codes_count_in_neither_channel_and_create_no_bins():
 
 def test_passenger_weight_only_counts_configured_person_types():
     events = _events([_row("2017-01-01 08:00", 1, "Fi", p1=(1, 2), p2=(99, 5), p3=(2, 1))])
-    start, end = resolve_bounds(events, None, None, 20)
+    start, end = resolve_bounds(profile_events(events), None, None, 20)
     weight = weight_expr(events, "passengers", [1, 2])
     binned = bin_events(events, weight, CHECK_MAP, 20, start, end)
     assert binned["check_ins"].item() == 3
@@ -121,17 +123,28 @@ def test_passenger_validation_ignores_events_that_are_not_counted():
     assert binned["check_ins"].sum() == 2
 
 
-def test_bin_events_rejects_missing_stop_id():
-    events = _events([_row("2017-01-01 08:00", None, "Fi")])
-    start, end = pd.Timestamp("2017-01-01"), pd.Timestamp("2017-01-02")
-    with pytest.raises(ValueError, match="lack timestamps or stop IDs"):
-        bin_events(events, pl.lit(1), CHECK_MAP, 20, start, end)
+def test_check_keys_rejects_missing_stop_id_even_on_ignored_codes():
+    events = _events([_row("2017-01-01 08:00", 1, "Fi"), _row("2017-01-01 08:05", None, "Cc")])
+    with pytest.raises(ValueError, match="1 events lack timestamps or stop IDs"):
+        check_keys(profile_events(events))
+
+
+def test_profile_is_one_row_per_code_with_span():
+    events = _events([
+        _row("2017-01-01 08:00", 1, "Fi"),
+        _row("2017-01-03 09:00", 2, "Fi"),
+        _row("2017-01-02 08:00", 1, "Co"),
+    ])
+    profile = profile_events(events)
+    assert profile["Model"].to_list() == ["Co", "Fi"]
+    assert profile["events"].to_list() == [1, 2]
+    assert resolve_bounds(profile, None, None, 20) == (pd.Timestamp("2017-01-01"), pd.Timestamp("2017-01-04"))
 
 
 def test_resolve_bounds_rejects_unaligned_bounds():
     events = _events([_row("2017-01-01 08:00", 1, "Fi")])
     with pytest.raises(ValueError, match="aligned"):
-        resolve_bounds(events, "2017-01-01 00:05", None, 20)
+        resolve_bounds(profile_events(events), "2017-01-01 00:05", None, 20)
 
 
 def test_build_stop_locations_normalises_ids_and_keeps_missing_null(tmp_path):
