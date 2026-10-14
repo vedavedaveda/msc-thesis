@@ -4,7 +4,10 @@ year: 2017                    # reads the cleaned dataset for this year
 # Optional: stop coordinates, not used by the zero-shot experiment. null = skip stop_locations.parquet.
 gtfs_stops_path: null         # e.g. /mnt/raid/data_sortedmob/RKD/gtfs_dk_2021/stops.txt (match `year`)
 interval_minutes: 30          # positive integer dividing 1440; 30 matches the paper's Citi Bike pick-drop
-count_mode: passengers        # transactions = event rows; passengers = sum of PassagerAntal for person_type_codes
+# NOTE: passenger counts are only recorded on check-out rows (Co/Cc); Fi/Su/Tr rows carry ~none
+# (checked on 2017-06-19..26: Co ~0.99 passengers/event, Fi sums to ~1.7% of its events), so
+# `passengers` gives near-zero check-ins. Taps are ~1 person each, so `transactions` is used.
+count_mode: transactions      # transactions = event rows; passengers = sum of PassagerAntal for person_type_codes
 # `Model` code -> in | out | ignore (ignore = known code, counted in neither channel).
 # Code meanings (from the data owner):
 #   Fi first check-in | Su transfer check-in | Tr check-in after check-out (Co+Tr = Su)
