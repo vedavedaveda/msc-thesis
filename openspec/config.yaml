@@ -10,6 +10,13 @@ githubCopilot:
 #   context: |
 #     Designs and tasks must cover Windows, macOS, and Linux
 #     Write all artifacts in Spanish
+context: |
+  Zero-shot experiments must stay comparable with the mobility-baselines Chronos-2-evaluation
+  reference (Citi Bike pick-drop setup); keep its quirks unless a change says otherwise.
+  Rejsekort data is restricted and lives only on the server; never commit data, sample rows,
+  credentials or archive contents. Tests must run on synthetic data without it.
+  Docs are read by the two thesis authors, coding agents and, later, an examiner.
+  Python 3.13, managed with uv.
 
 # Per-artifact rules (optional)
 # Add custom rules for specific artifacts.
