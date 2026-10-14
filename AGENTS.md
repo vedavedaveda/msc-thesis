@@ -1,7 +1,8 @@
 # AGENTS.md
 
 Working rules for coding agents in this repo. For explanations, see [README.md](README.md) (setup,
-pipeline, repo map), [docs/data/rejsekort.md](docs/data/rejsekort.md) (data semantics) and
+pipeline, repo map), [docs/running.md](docs/running.md) (run instructions),
+[docs/data/rejsekort.md](docs/data/rejsekort.md) (data semantics) and
 [docs/experiments/](docs/experiments/) (one page per experiment).
 
 ## Commands
@@ -57,4 +58,4 @@ pipeline, repo map), [docs/data/rejsekort.md](docs/data/rejsekort.md) (data sema
   (`/opsx:explore`, `/opsx:propose`, `/opsx:apply`, `/opsx:archive`). Durable requirements live in
   `openspec/specs/`, and active changes in `openspec/changes/`.
 - When you change a CLI, a config key or an output path, update README.md, the matching page in
-  `docs/` and this file in the same change.
+  `docs/` (including `docs/running.md`) and this file in the same change.

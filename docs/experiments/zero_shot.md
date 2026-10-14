@@ -37,7 +37,8 @@ uv run python -m msc_thesis.data.rejsekort.cleaning --year 2017
 uv run python -m msc_thesis.data.rejsekort.stop_timeseries --year 2017
 ```
 
-Partial spans (`--day`, `--start/--end`) write to separate folders and are not read by the builder.
+Partial spans (`--day`, `--start/--end`) write to separate folders and are not read by the builder;
+see [running on a day range](../running.md#zero-shot-on-a-day-range) for a workaround.
 The stop time series must also:
 
 - be built with `dense_output: true`, so every stop has every bin;
@@ -73,6 +74,51 @@ from msc_thesis.experiments.zero_shot.metrics import score_forecasts
 scores = score_forecasts(pl.read_parquet("data/processed/zero_shot/2017/forecasts.parquet"))
 scores["overall"]
 ```
+
+## Recorded runs
+
+### 2017-03-16 to 2017-06-15 (92 days, 2026-10-14)
+
+Zero-shot Chronos-2 on three months of 2017 data, testing on the last 14 days (2017-06-02 to
+2017-06-15). Code: `main` at `9d8b2a9`. Run on the server.
+
+To reproduce, run from a clean checkout of that commit:
+
+```bash
+git switch --detach 9d8b2a9 && uv sync
+
+S="--year 2017 --start 2017-03-16 --end 2017-06-15"
+uv run python -m msc_thesis.data.rejsekort.ingestion $S
+uv run python -m msc_thesis.data.rejsekort.cleaning $S
+uv run python -m msc_thesis.data.rejsekort.stop_timeseries $S --set check_type_map_confirmed=true
+
+mv data/processed/stop_timeseries/2017 data/processed/stop_timeseries/2017_old 2>/dev/null
+cp -r data/processed/stop_timeseries/2017-03-16_2017-06-15 data/processed/stop_timeseries/2017
+
+W="--set start_date=2017-03-16 --set n_days=92 --set start_test_day=78 --set n_test_days=14"
+uv run python -m msc_thesis.data.build zero_shot $W
+uv run python -m msc_thesis.experiments.zero_shot.run $W
+```
+
+Everything else is the committed config:
+
+- `configs/stop_timeseries.yaml`: 30-min bins, `count_mode: transactions`, dense output, and
+  `check_type_map` with `Io` ignored. The map was accepted with `--set check_type_map_confirmed=true`
+  without a decision on `Io`.
+- `configs/zero_shot.yaml`: the 250 busiest stops before the test period, target `check_ins` with
+  `check_outs` as a past covariate, horizons 30 to 360 min, `amazon/chronos-2`, seed 42.
+
+`metrics.json` stores the full config used, so you can check a rerun against it. The steps above
+are explained in [running on a day range](../running.md#zero-shot-on-a-day-range).
+
+Overall metrics:
+
+| MAE | MAPE | RMSE | COVERAGE | IQR_MEAN |
+|---|---|---|---|---|
+| 4.956 | 0.633 | 10.131 | 0.697 | 15.419 |
+
+The test period includes 2017-06-05, which was both Whit Monday and Constitution Day (a public
+holiday).
 
 ## References
 

@@ -56,6 +56,9 @@ cleaning must use the same span. On a first run, `stop_timeseries` stops and pri
 event counts until `check_type_map_confirmed` is true in `configs/stop_timeseries.yaml`. See
 [docs/data/rejsekort.md](docs/data/rejsekort.md) for why.
 
+**Step-by-step run instructions** (spans, day-range zero-shot runs, troubleshooting):
+[docs/running.md](docs/running.md).
+
 ## Experiments
 
 - **Zero-shot Chronos-2**, mirroring the mobility-baselines Citi Bike setup.
@@ -66,7 +69,7 @@ event counts until `check_type_map_confirmed` is true in `configs/stop_timeserie
 | What | Who can do it | How |
 |---|---|---|
 | Install and run the tests | anyone | `uv sync && uv run pytest` |
-| Rebuild everything from raw data | server access and `~/.rkd_pass` | the [pipeline](#pipeline) above |
+| Rebuild everything from raw data | server access and `~/.rkd_pass` | [docs/running.md](docs/running.md) |
 | Re-score existing forecasts | anyone with `forecasts.parquet` | [re-scoring](docs/experiments/zero_shot.md#re-scoring) |
 
 ## Repo map
@@ -101,7 +104,7 @@ src/msc_thesis/
     simulation_utils.py           planned / unverified (imported, not integrated)
 configs/                          one YAML per configurable step (events.yaml, rejsekort.yaml: empty)
 tests/                            pytest on synthetic data (test_events.py, test_integration.py: empty)
-docs/                             data and experiment pages
+docs/                             run instructions, data and experiment pages
 openspec/                         specs and change proposals (OpenSpec)
 scrap/                            exploratory notebooks, not part of the pipeline
 main.py                           uv project placeholder
