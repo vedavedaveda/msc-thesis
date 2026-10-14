@@ -1,0 +1,18 @@
+# Config for the stop time-series dataset (see data/rejsekort/stop_timeseries.py).
+# Target: check-ins and check-outs per Rejsekort stop per time step, plus stop locations.
+year: 2017                    # reads the cleaned dataset for this year
+gtfs_stops_path: /mnt/raid/data_sortedmob/RKD/gtfs_dk_2021/stops.txt   # adjust together with `year`
+interval_minutes: 30          # positive integer dividing 1440; 30 matches the paper's Citi Bike pick-drop
+count_mode: passengers        # transactions = event rows; passengers = sum of PassagerAntal for person_type_codes
+# `Model` code -> check type. Confirm these meanings for your source before setting
+# check_type_map_confirmed: true; add other codes (e.g. Cc) only after checking them.
+# Transfer check-ins (Tr) count as check-ins; no intermediate check-out is inferred.
+check_type_map:
+  Fi: in
+  Tr: in
+  Co: out
+check_type_map_confirmed: false
+person_type_codes: [1, 2, 4, 5, 7, 8, 9, 10, 18]   # only used when count_mode: passengers
+dense_output: true            # zero-fill every (interval, used stop); false = observed bins only
+start_time: 2017-04-01        # inclusive, naive local time; null = first event date (zero_shot window)
+end_time: 2017-07-01          # exclusive, naive local time; null = day after last event

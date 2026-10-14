@@ -1,7 +1,7 @@
 """CLI: build one experiment's dataset.
 
     uv run python -m msc_thesis.data.build zero_shot
-    uv run python -m msc_thesis.data.build zero_shot --set start_date=2019-01-01 --set end_date=2019-06-30
+    uv run python -m msc_thesis.data.build zero_shot --set start_date=2017-04-01 --set n_stations=100
 
 `--set KEY=VALUE` overrides a config entry; VALUE is parsed as YAML.
 """

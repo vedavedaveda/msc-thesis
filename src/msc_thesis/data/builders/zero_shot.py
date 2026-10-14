@@ -1,173 +1,148 @@
-"""Builder for the zero-shot experiment: counts per station per time step.
+"""Builder for the zero-shot experiment (Chronos-2, following the mobility-baselines Citi Bike setup).
 
-Reads the cleaned Rejsekort dataset (which must contain `check_type`) and writes
-a tidy table to data/processed/zero_shot/:
+Reads the shared stop time series (rejsekort/stop_timeseries.py) and writes one long
+table to data/processed/zero_shot/<year>/series.parquet:
 
-    counts_<granularity>_<start>_<end>/station_batch=<k>/part-0.parquet
-        station, time, check_type, count     (zero-filled, regular time grid)
-    stations.parquet
-        station, name                        (most frequent name per station)
+    item_id, timestamp, check_ins, check_outs      (sorted by item_id, timestamp)
 
-Memory: the sparse counts are aggregated one day at a time, and the dense
-zero-filled grid is built one batch of stations at a time, never for the year.
+One row per (stop, time bin) on a dense, regular grid covering `n_days` from
+`start_date`. `target` is the series to forecast and `past_covariates` are passed as
+context only, as in the paper's `bike_pick` / `bike_drop` pairing. The paper's 250
+stations are mirrored by keeping the `n_stations` busiest stops, ranked on the days
+before the test period so the test data does not pick the stations. Aggregation and
+the check-in/out definition live upstream; this step only selects and validates.
 """
 
 import datetime as dt
-import shutil
 from pathlib import Path
 
 import polars as pl
 
 from msc_thesis.data.builders.base import Config
-from msc_thesis.data.rejsekort.cleaning import clean_path
-from msc_thesis.utils.fs import publish_dir, tmp_dir_for
+from msc_thesis.data.rejsekort.stop_timeseries import stop_timeseries_dir
 from msc_thesis.utils.logging import get_logger
 from msc_thesis.utils.paths import PROCESSED_DIR
 
 log = get_logger(__name__)
 
 EXPERIMENT = "zero_shot"
+CHANNELS = {"check_ins", "check_outs"}
+CONTEXT_DAYS = 7          # Chronos-2 eval feeds one week of history before each forecast
+LOW_ACTIVITY_RATIO = 0.5  # flag days below this share of their weekday's median volume
 
 
-def _every(granularity: str) -> str:
-    """Convert e.g. "5min" to polars' interval syntax ("5m"); whole minutes only."""
-    minutes = pl.Series([granularity]).str.extract(r"^(\d+)\s*min$", 1)[0]
-    if minutes is None or int(minutes) < 1:
-        raise ValueError(f"granularity must look like '5min' (whole minutes), got {granularity!r}")
-    return f"{int(minutes)}m"
+def _as_datetime(value: object) -> dt.datetime:
+    if isinstance(value, dt.datetime):
+        return value
+    if isinstance(value, dt.date):
+        return dt.datetime.combine(value, dt.time.min)
+    return dt.datetime.fromisoformat(str(value))
 
 
-def _time_bins(cfg: Config, every: str) -> pl.Series:
-    start, end = cfg["start_date"], cfg["end_date"]
-    return pl.datetime_range(
-        dt.datetime.combine(start, dt.time.min),
-        dt.datetime.combine(end, dt.time.max),
-        interval=every,
-        eager=True,
-    ).alias("time")
+def window(cfg: Config) -> tuple[dt.datetime, dt.datetime, dt.datetime]:
+    """(start, test start, end) of the half-open window, checked against the split settings."""
+    n_days, test_day, n_test = cfg["n_days"], cfg["start_test_day"], cfg["n_test_days"]
+    if not CONTEXT_DAYS <= test_day or test_day + n_test != n_days:
+        raise ValueError(
+            f"Need {CONTEXT_DAYS} <= start_test_day and start_test_day + n_test_days == n_days, "
+            f"got start_test_day={test_day}, n_test_days={n_test}, n_days={n_days}"
+        )
+    start = _as_datetime(cfg["start_date"])
+    return start, start + dt.timedelta(days=test_day), start + dt.timedelta(days=n_days)
 
 
-def _select_days(clean_dir: Path, start: dt.date, end: dt.date) -> list[Path]:
-    """Day partitions that can hold events in [start, end].
+def select_stations(df: pl.DataFrame, cfg: Config, test_start: dt.datetime) -> list[str]:
+    """Explicit `stations`, or the `n_stations` busiest stops before the test period."""
+    if cfg["stations"] is not None:
+        return [str(s) for s in cfg["stations"]]
+    ranked = (
+        df.filter(pl.col("timestamp") < test_start)
+        .group_by("item_id")
+        .agg((pl.col("check_ins") + pl.col("check_outs")).sum().alias("volume"))
+        .sort(["volume", "item_id"], descending=[True, False])
+    )
+    if len(ranked) < cfg["n_stations"]:
+        log.warning("Only %d stops available; wanted n_stations=%d", len(ranked), cfg["n_stations"])
+    return ranked.head(cfg["n_stations"])["item_id"].to_list()
 
-    Partitions are named by journey date, and a journey can run past midnight, so
-    the day before `start` is included. Unparseable names are kept to be safe.
+
+def low_activity_days(df: pl.DataFrame) -> pl.DataFrame:
+    """Days whose total volume is far below the median for that weekday.
+
+    Dense zero-filling cannot tell feed outages from real zero demand; this flags
+    candidates to inspect (holidays will show up here too).
     """
-    keep = []
-    for d in sorted(clean_dir.glob("RejseDato=*")):
-        try:
-            day = dt.datetime.strptime(d.name.split("=", 1)[1], "%d%b%Y").date()
-        except ValueError:
-            keep.append(d)
-            continue
-        if start - dt.timedelta(days=1) <= day <= end + dt.timedelta(days=1):
-            keep.append(d)
-    return keep
+    daily = (
+        df.group_by(pl.col("timestamp").dt.date().alias("date"))
+        .agg((pl.col("check_ins") + pl.col("check_outs")).sum().alias("volume"))
+        .with_columns(pl.col("date").dt.weekday().alias("weekday"))
+    )
+    return (
+        daily.with_columns(pl.col("volume").median().over("weekday").alias("weekday_median"))
+        .filter(pl.col("volume") < LOW_ACTIVITY_RATIO * pl.col("weekday_median"))
+        .sort("date")
+    )
 
 
-def _aggregate_days(clean_dir: Path, sparse_dir: Path, cfg: Config, every: str) -> pl.DataFrame:
-    """Sparse counts per (station, time, check_type) for each day; returns station names."""
-    station, count = cfg["station_key"], cfg["count"]
-    day_dirs = _select_days(clean_dir, cfg["start_date"], cfg["end_date"])
-    if not day_dirs:
-        raise FileNotFoundError(f"No day partitions in {clean_dir} overlap the period. Run cleaning first?")
-
-    start = dt.datetime.combine(cfg["start_date"], dt.time.min)
-    end = dt.datetime.combine(cfg["end_date"], dt.time.max)
-    names = []
-    for day_dir in day_dirs:
-        lf = pl.scan_parquet(day_dir / "*.parquet")
-        if "check_type" not in lf.collect_schema().names():
-            raise ValueError(
-                "Cleaned data has no `check_type` column. Implement `derive_check_type` "
-                "in rejsekort/cleaning.py, wire it into `clean_year`, and rerun cleaning."
-            )
-        lf = lf.filter(pl.col("event_time").is_between(start, end))
-        if cfg["stations"] is not None:
-            lf = lf.filter(pl.col(station).is_in(cfg["stations"]))
-
-        out = sparse_dir / day_dir.name
-        out.mkdir()
-        (
-            lf.group_by(
-                pl.col(station).alias("station"),
-                pl.col("event_time").dt.truncate(every).alias("time"),
-                "check_type",
-            )
-            .agg(pl.col(count).sum().alias("count"))
-            .sink_parquet(out / "part-0.parquet")
+def to_series_frame(ts: pl.DataFrame, cfg: Config) -> pl.DataFrame:
+    """Window, select stations and validate the stop time series into the Chronos input layout."""
+    target, covariates = cfg["target"], list(cfg["past_covariates"])
+    unknown = ({target} | set(covariates)) - CHANNELS
+    if unknown or target in covariates:
+        raise ValueError(
+            f"target and past_covariates must be distinct columns from {sorted(CHANNELS)}, "
+            f"got target={target!r}, past_covariates={covariates}"
         )
-        names.append(
-            lf.group_by(pl.col(station).alias("station"), pl.col("StopPointId").alias("name"))
-            .agg(pl.len().alias("n"))
-            .collect()
+    start, test_start, end = window(cfg)
+
+    df = ts.rename({"stop_id": "item_id", "time_idx": "timestamp"}).filter(
+        (pl.col("timestamp") >= start) & (pl.col("timestamp") < end)
+    )
+    df = df.filter(pl.col("item_id").is_in(select_stations(df, cfg, test_start)))
+    if df.is_empty():
+        raise ValueError("No rows left after applying the window and station selection")
+
+    df = df.select("item_id", "timestamp", target, *covariates).sort("item_id", "timestamp")
+
+    # Chronos is fed fixed-length windows per item, so every stop needs every time bin.
+    times = df["timestamp"].unique().sort()
+    steps = times.diff().drop_nulls().unique()
+    if len(steps) > 1:
+        raise ValueError(f"Time bins are not regularly spaced; found steps {steps.to_list()}")
+    if (df.group_by("item_id").len()["len"] != len(times)).any():
+        raise ValueError(
+            "Series are not on a common dense grid (stops have different numbers of bins). "
+            "Rebuild stop_timeseries with dense_output: true."
         )
-    return pl.concat(names)
+    expected = int((end - start) / steps.item()) if len(steps) else 1
+    if times[0] != start or len(times) != expected:
+        raise ValueError(
+            f"Window [{start}, {end}) is not fully covered: {len(times)} bins from {times[0]}, "
+            f"expected {expected}. Rebuild stop_timeseries over this window."
+        )
+    return df
 
 
 def build_zero_shot(cfg: Config) -> Path:
-    if not cfg["fill_empty_steps"]:
-        raise NotImplementedError("Only fill_empty_steps: true is supported")
-    if cfg["start_date"].year != cfg["end_date"].year:
-        raise ValueError("start_date and end_date must be in the same year")
-    if cfg["start_date"] > cfg["end_date"]:
-        raise ValueError(f"start_date {cfg['start_date']} is after end_date {cfg['end_date']}")
-    every = _every(cfg["granularity"])
-    year = cfg["start_date"].year
-    bins = _time_bins(cfg, every)
-
-    out_root = PROCESSED_DIR / EXPERIMENT
-    out_root.mkdir(parents=True, exist_ok=True)
-    counts_final = out_root / f"counts_{cfg['granularity']}_{cfg['start_date']}_{cfg['end_date']}"
-    counts_tmp = tmp_dir_for(counts_final)
-    sparse_dir = tmp_dir_for(out_root / "sparse")  # scratch, deleted at the end
-
-    try:
-        log.info("Aggregating sparse counts per day")
-        names = _aggregate_days(clean_path(year), sparse_dir, cfg, every)
-        sparse = pl.scan_parquet(sparse_dir / "*" / "*.parquet")
-
-        check_types = sparse.select(pl.col("check_type").unique().sort()).collect().to_series().to_list()
-        stations = sparse.select(pl.col("station").unique().sort()).collect().to_series().to_list()
-        check_enum = pl.Enum(check_types)
-        batch_size = cfg["station_batch_size"]
-        log.info("%d stations, %d time steps, check types %s", len(stations), len(bins), check_types)
-
-        for k in range(0, len(stations), batch_size):
-            batch = stations[k : k + batch_size]
-            grid = (
-                pl.DataFrame({"station": batch}, schema={"station": sparse.collect_schema()["station"]})
-                .join(bins.to_frame(), how="cross")
-                .join(pl.DataFrame({"check_type": check_types}, schema={"check_type": pl.String}), how="cross")
-            )
-            # A bin can appear in two day partitions (events just after midnight), so sum again.
-            counts = (
-                sparse.filter(pl.col("station").is_in(batch))
-                .group_by("station", "time", "check_type")
-                .agg(pl.col("count").sum())
-                .collect()
-            )
-            dense = (
-                grid.join(counts, on=["station", "time", "check_type"], how="left")
-                .with_columns(pl.col("count").fill_null(0), pl.col("check_type").cast(check_enum))
-                .sort("station", "check_type", "time")
-            )
-            part = counts_tmp / f"station_batch={k // batch_size}"
-            part.mkdir()
-            dense.write_parquet(part / "part-0.parquet", compression="zstd")
-            log.info("  wrote stations %d-%d of %d", k, k + len(batch), len(stations))
-
-        publish_dir(counts_tmp, counts_final)
-        (
-            names.group_by("station")
-            .agg(pl.col("name").sort_by("n").last())
-            .sort("station")
-            .write_parquet(out_root / "stations.parquet")
+    source = stop_timeseries_dir(cfg["year"]) / "stop_timeseries.parquet"
+    if not source.exists():
+        raise FileNotFoundError(
+            f"Stop time series not found: {source}. "
+            f"Run `python -m msc_thesis.data.rejsekort.stop_timeseries --year {cfg['year']}` first."
         )
-    except BaseException:
-        shutil.rmtree(counts_tmp, ignore_errors=True)
-        raise
-    finally:
-        shutil.rmtree(sparse_dir, ignore_errors=True)
+    start, _, end = window(cfg)
+    ts = pl.scan_parquet(source).filter(pl.col("time_idx").is_between(start, end, closed="left")).collect()
+    df = to_series_frame(ts, cfg)
 
-    return out_root
+    flagged = low_activity_days(df)
+    if not flagged.is_empty():
+        log.warning("Low-activity days (check for outages or holidays):\n%s", flagged)
+
+    out_dir = PROCESSED_DIR / EXPERIMENT / str(cfg["year"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    df.write_parquet(out_dir / "series.parquet", compression="zstd")
+    log.info(
+        "Wrote %d rows (%d stops, %d bins) to %s",
+        len(df), df["item_id"].n_unique(), df["timestamp"].n_unique(), out_dir / "series.parquet",
+    )
+    return out_dir

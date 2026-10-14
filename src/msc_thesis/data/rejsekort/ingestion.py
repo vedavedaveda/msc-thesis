@@ -49,8 +49,7 @@ SCHEMA = pa.schema(
         ("StopPointNr", pa.int64()),
         ("StopPointId", pa.string()),
         ("ContractorId", pa.string()),
-        # Event code per row, e.g. "Fi", "Cc". Not yet mapped to check-in/out:
-        # TODO(veda): derive `Check_type` in cleaning once the codes are understood.
+        # Event code per row, e.g. "Fi", "Cc". Mapped to check-in/out in stop_timeseries.
         ("Model", pa.string()),
         ("turtype", pa.string()),  # trip pattern, e.g. "FiCc"
         ("ModalKomb", pa.string()),

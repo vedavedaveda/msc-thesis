@@ -35,28 +35,15 @@ def clean_path(year: int, day: dt.date | None = None) -> Path:
     return INTERIM_DIR / "rejsekort" / name  # parquet dataset, partitioned by RejseDato
 
 
-def derive_check_type(lf: pl.LazyFrame) -> pl.LazyFrame:
-    """Add a `check_type` column ("in" / "out") to the event rows.
-
-    TODO(veda): the rule is unknown until the `Model` and `turtype` codes are
-    understood (row order within a `turngl` trip may also matter). Once it is,
-    implement it here and call it from `clean_year` after `_clean`.
-    """
-    raise NotImplementedError("check_type derivation not defined yet")
-
-
 # Raw columns kept only so duplicates are judged on the full row.
 _DEDUPE_ONLY_COLS = ["NyUdførende", "ProduktFamilie"]
 
 
 def _clean(lf: pl.LazyFrame, year: int) -> pl.LazyFrame:
     # Dedupe first, on the untouched raw row (all columns).
+    # Msgreportdate is the only time column; it is treated as the tap time.
     return lf.unique(maintain_order=False).with_columns(
         pl.col("Msgreportdate").str.to_datetime(TIMESTAMP_FORMAT, strict=False).alias("event_time"),
-        # Passengers checked in/out on this event, summed over the three passenger types.
-        pl.sum_horizontal(
-            pl.col("PassagerAntal1", "PassagerAntal2", "PassagerAntal3").fill_null(0)
-        ).alias("passengers"),
     ).filter(
         pl.col("event_time").is_not_null()
         & (pl.col("event_time").dt.year() == year)
