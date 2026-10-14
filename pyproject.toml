@@ -23,3 +23,13 @@ dev = [
     "nbstripout>=0.9.1",
     "pytest>=9.1.1",
 ]
+
+# The default Linux torch wheel targets a newer CUDA than the server driver (12.4) supports, so
+# torch silently falls back to CPU. cu126 wheels run on 12.x drivers; macOS keeps the PyPI wheel.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
