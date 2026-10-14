@@ -20,9 +20,14 @@ Assumptions (see configs/stop_timeseries.yaml):
 - Zeros in dense output mean "no recorded events", not proof the feed was complete.
 
     uv run python -m msc_thesis.data.rejsekort.stop_timeseries --year 2017
+    uv run python -m msc_thesis.data.rejsekort.stop_timeseries --year 2017 --start 2017-06-19 --end 2017-06-26
+
+`--day` / `--start --end` read the matching partial clean (see cleaning.py) and set
+`start_time` / `end_time` to cover exactly those days.
 """
 
 import argparse
+import datetime as dt
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +38,7 @@ import pyarrow.parquet as pq
 import yaml
 
 from msc_thesis.data.rejsekort.cleaning import clean_path
+from msc_thesis.data.rejsekort.ingestion import add_span_args, parse_span
 from msc_thesis.utils.logging import get_logger
 from msc_thesis.utils.paths import CONFIGS_DIR, PROCESSED_DIR
 
@@ -247,11 +253,12 @@ def write_timeseries(
     return rows, {k: int(v) for k, v in written.items()}
 
 
-def build_stop_timeseries(cfg: Config) -> Path:
+def build_stop_timeseries(cfg: Config, input_path: Path | None = None) -> Path:
+    """`input_path` defaults to the full-year clean for `cfg["year"]`."""
     validate_config(cfg)
     year = cfg["year"]
     interval = cfg["interval_minutes"]
-    input_path = clean_path(year)
+    input_path = input_path or clean_path(year)
     if not input_path.exists():
         raise FileNotFoundError(f"Cleaned dataset not found: {input_path}. Run cleaning first.")
     files = sorted(input_path.rglob("*.parquet")) if input_path.is_dir() else [input_path]
@@ -297,6 +304,7 @@ def load_config() -> Config:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--year", type=int, help="overrides `year` in the config")
+    add_span_args(parser)
     parser.add_argument("--set", dest="overrides", action="append", default=[], metavar="KEY=VALUE",
                         help="override a config entry; VALUE is parsed as YAML")
     args = parser.parse_args()
@@ -309,7 +317,12 @@ def main() -> None:
         if not sep or key not in cfg:
             parser.error(f"--set expects KEY=VALUE with a key from the config ({sorted(cfg)}), got {item!r}")
         cfg[key] = yaml.safe_load(value)
-    out_dir = build_stop_timeseries(cfg)
+    start, end = parse_span(parser, args)
+    input_path = None
+    if start is not None:
+        input_path = clean_path(cfg["year"], start, end)
+        cfg["start_time"], cfg["end_time"] = start, end + dt.timedelta(days=1)
+    out_dir = build_stop_timeseries(cfg, input_path)
     log.info("Wrote stop time series to %s", out_dir)
 
 

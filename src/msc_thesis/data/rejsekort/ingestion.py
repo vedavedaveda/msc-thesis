@@ -7,6 +7,7 @@ full year is never held in memory.
 
     uv run python -m msc_thesis.data.rejsekort.ingestion --year 2019
     uv run python -m msc_thesis.data.rejsekort.ingestion --year 2019 --day 2019-03-05
+    uv run python -m msc_thesis.data.rejsekort.ingestion --year 2019 --start 2019-03-04 --end 2019-03-11
 """
 
 import argparse
@@ -75,9 +76,27 @@ _PANDAS_DTYPES = {
 _REJSEDATO_FORMAT = "%d%b%Y"
 
 
-def interim_path(year: int, day: dt.date | None = None) -> Path:
-    name = f"rejsekort_{day.isoformat()}" if day else f"rejsekort_{year}"
-    return INTERIM_DIR / "rejsekort" / name  # parquet dataset, partitioned by RejseDato
+def span_name(year: int, start: dt.date | None = None, end: dt.date | None = None) -> str:
+    """Dataset name suffix: the year, one day, or an inclusive day range."""
+    if start is None:
+        return str(year)
+    if end is None or end == start:
+        return start.isoformat()
+    return f"{start.isoformat()}_{end.isoformat()}"
+
+
+def interim_path(year: int, start: dt.date | None = None, end: dt.date | None = None) -> Path:
+    # parquet dataset, partitioned by RejseDato
+    return INTERIM_DIR / "rejsekort" / f"rejsekort_{span_name(year, start, end)}"
+
+
+def _day_strings(start: dt.date, end: dt.date | None) -> set[str]:
+    """RejseDato values for the inclusive range [start, end]."""
+    end = end or start
+    if end < start:
+        raise ValueError(f"end ({end}) is before start ({start})")
+    n_days = (end - start).days + 1
+    return {(start + dt.timedelta(days=i)).strftime(_REJSEDATO_FORMAT).upper() for i in range(n_days)}
 
 
 def _open_stream(archive: Path, pass_file: Path) -> subprocess.Popen:
@@ -89,24 +108,26 @@ def _open_stream(archive: Path, pass_file: Path) -> subprocess.Popen:
     return subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
-def _filter_chunk(chunk: pd.DataFrame, day_str: str | None) -> pd.DataFrame:
+def _filter_chunk(chunk: pd.DataFrame, days: set[str] | None) -> pd.DataFrame:
     chunk = chunk[chunk[REGION_COL] == REGION_VALUE]
-    if day_str is not None:
-        chunk = chunk[chunk["RejseDato"].str.upper() == day_str]
+    if days is not None:
+        chunk = chunk[chunk["RejseDato"].str.upper().isin(days)]
     return chunk
 
 
 def ingest_year(
     year: int,
-    day: dt.date | None = None,
+    start: dt.date | None = None,
+    end: dt.date | None = None,
     source_dir: Path = ENCRYPTED_DIR,
     pass_file: Path = PASS_FILE,
     out_path: Path | None = None,
 ) -> Path:
-    """Ingest one year's archive into an interim parquet dataset; optionally keep one day only.
+    """Ingest one year's archive into an interim parquet dataset; optionally keep only
+    the journey dates in [start, end] (inclusive; `end` defaults to `start`).
 
-    The archive is a single compressed stream, so `day` still reads the whole file;
-    it only shrinks the output (useful for quick end-to-end tests).
+    The archive is a single compressed stream, so a date range still reads the whole
+    file; it only shrinks the output (useful for quick end-to-end tests).
     """
     archive = source_dir / ARCHIVE_TEMPLATE.format(year=year)
     if not archive.exists():
@@ -114,12 +135,12 @@ def ingest_year(
     if not pass_file.exists():
         raise FileNotFoundError(f"Password file not found: {pass_file}")
 
-    out_path = out_path or interim_path(year, day)
+    days = _day_strings(start, end) if start else None
+    out_path = out_path or interim_path(year, start, end)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = tmp_dir_for(out_path)
-    day_str = day.strftime(_REJSEDATO_FORMAT).upper() if day else None
 
-    log.info("Ingesting %s%s -> %s", archive.name, f" (day {day})" if day else "", out_path)
+    log.info("Ingesting %s%s -> %s", archive.name, f" ({len(days)} days from {start})" if days else "", out_path)
 
     proc = _open_stream(archive, pass_file)
     rows_in = rows_out = 0
@@ -134,7 +155,7 @@ def ingest_year(
         )
         for i, chunk in enumerate(reader):
             rows_in += len(chunk)
-            chunk = _filter_chunk(chunk, day_str)
+            chunk = _filter_chunk(chunk, days)
             rows_out += len(chunk)
             if len(chunk):
                 pq.write_to_dataset(
@@ -166,12 +187,29 @@ def ingest_year(
     return out_path
 
 
+def add_span_args(parser: argparse.ArgumentParser) -> None:
+    """--day, or --start/--end (inclusive): restrict to some journey dates, for testing."""
+    parser.add_argument("--day", type=dt.date.fromisoformat, help="a single day (YYYY-MM-DD)")
+    parser.add_argument("--start", type=dt.date.fromisoformat, help="first day (YYYY-MM-DD)")
+    parser.add_argument("--end", type=dt.date.fromisoformat, help="last day, inclusive (YYYY-MM-DD)")
+
+
+def parse_span(parser: argparse.ArgumentParser, args: argparse.Namespace) -> tuple[dt.date | None, dt.date | None]:
+    if args.day and (args.start or args.end):
+        parser.error("use either --day or --start/--end")
+    if args.end and not args.start:
+        parser.error("--end needs --start")
+    if args.day:
+        return args.day, args.day
+    return args.start, args.end or args.start
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--year", type=int, default=2019)
-    parser.add_argument("--day", type=dt.date.fromisoformat, help="keep a single day (YYYY-MM-DD), for testing")
+    add_span_args(parser)
     args = parser.parse_args()
-    ingest_year(args.year, args.day)
+    ingest_year(args.year, *parse_span(parser, args))
 
 
 if __name__ == "__main__":

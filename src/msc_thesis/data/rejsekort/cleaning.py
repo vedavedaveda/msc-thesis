@@ -9,6 +9,7 @@ Duplicates are rows identical in every raw column. Identical rows always share a
 holding more than one day in memory.
 
     uv run python -m msc_thesis.data.rejsekort.cleaning --year 2019
+    uv run python -m msc_thesis.data.rejsekort.cleaning --year 2019 --start 2019-03-04 --end 2019-03-11
 """
 
 import argparse
@@ -18,7 +19,7 @@ from pathlib import Path
 
 import polars as pl
 
-from msc_thesis.data.rejsekort.ingestion import interim_path
+from msc_thesis.data.rejsekort.ingestion import add_span_args, interim_path, parse_span, span_name
 from msc_thesis.utils.fs import publish_dir, tmp_dir_for
 from msc_thesis.utils.logging import get_logger
 from msc_thesis.utils.paths import INTERIM_DIR
@@ -30,9 +31,9 @@ TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%S"
 PARTITION_COL = "RejseDato"
 
 
-def clean_path(year: int, day: dt.date | None = None) -> Path:
-    name = f"clean_{day.isoformat()}" if day else f"clean_{year}"
-    return INTERIM_DIR / "rejsekort" / name  # parquet dataset, partitioned by RejseDato
+def clean_path(year: int, start: dt.date | None = None, end: dt.date | None = None) -> Path:
+    # parquet dataset, partitioned by RejseDato
+    return INTERIM_DIR / "rejsekort" / f"clean_{span_name(year, start, end)}"
 
 
 # Raw columns kept only so duplicates are judged on the full row.
@@ -57,12 +58,13 @@ def _days(dataset: Path) -> list[str]:
 
 def clean_year(
     year: int,
-    day: dt.date | None = None,
+    start: dt.date | None = None,
+    end: dt.date | None = None,
     in_path: Path | None = None,
     out_path: Path | None = None,
 ) -> Path:
-    in_path = in_path or interim_path(year, day)
-    out_path = out_path or clean_path(year, day)
+    in_path = in_path or interim_path(year, start, end)
+    out_path = out_path or clean_path(year, start, end)
     if not in_path.exists():
         raise FileNotFoundError(f"Ingested dataset not found: {in_path}. Run ingestion first.")
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -93,9 +95,9 @@ def clean_year(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--year", type=int, default=2019)
-    parser.add_argument("--day", type=dt.date.fromisoformat, help="clean the single-day ingest (YYYY-MM-DD)")
+    add_span_args(parser)  # must match the ingestion run being cleaned
     args = parser.parse_args()
-    clean_year(args.year, args.day)
+    clean_year(args.year, *parse_span(parser, args))
 
 
 if __name__ == "__main__":
