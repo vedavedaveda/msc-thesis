@@ -14,7 +14,8 @@ written one day at a time. Stop IDs are not merged into stations.
 
 Assumptions (see configs/stop_timeseries.yaml):
 - `Model` codes map to check-in/out via `check_type_map`, which must be reviewed
-  and confirmed. Unknown or missing codes raise instead of being dropped.
+  and confirmed. Unknown or missing codes raise instead of being dropped; codes
+  mapped to "ignore" are excluded from both channels and logged with their counts.
 - Bins are left-closed, right-open, labelled by their start. Timestamps are local
   and timezone-naive, as in cleaning: the repeated autumn DST hour cannot be told apart.
 - Zeros in dense output mean "no recorded events", not proof the feed was complete.
@@ -50,6 +51,7 @@ CONFIG_NAME = "stop_timeseries"
 OUTPUT_NAME = "stop_timeseries"
 PERSON_SLOTS = (1, 2, 3)
 COUNT_MODES = {"transactions", "passengers"}
+CHECK_TYPES = {"in", "out", "ignore"}  # "ignore": a known code that is neither counted as in nor out
 MAX_DAILY_GRID_ROWS = 10_000_000
 
 OUTPUT_SCHEMA = pa.schema([
@@ -67,8 +69,8 @@ def validate_config(cfg: Config) -> None:
     if cfg["count_mode"] not in COUNT_MODES:
         raise ValueError(f"count_mode must be one of {sorted(COUNT_MODES)}")
     mapping = cfg["check_type_map"]
-    if not mapping or not set(mapping.values()) <= {"in", "out"}:
-        raise ValueError("check_type_map values must be 'in' or 'out'")
+    if not mapping or not set(mapping.values()) <= CHECK_TYPES:
+        raise ValueError("check_type_map values must be 'in', 'out' or 'ignore'")
 
 
 def check_codes(events: pl.LazyFrame, check_type_map: dict[str, str], confirmed: bool) -> pl.DataFrame:
@@ -152,6 +154,7 @@ def bin_events(
         events.filter(
             (pl.col("event_time") >= start_time.to_pydatetime())
             & (pl.col("event_time") < end_time.to_pydatetime())
+            & pl.col("Model").replace_strict(check_type_map).ne("ignore")
         )
         .with_columns(
             pl.col("StopPointNr").cast(pl.String).alias("stop_id"),
@@ -268,6 +271,9 @@ def build_stop_timeseries(cfg: Config, input_path: Path | None = None) -> Path:
     events = pl.scan_parquet(files)
     code_counts = check_codes(events, cfg["check_type_map"], cfg["check_type_map_confirmed"])
     log.info("Model code counts:\n%s", code_counts)
+    ignored = code_counts.filter(pl.col("Model").replace_strict(cfg["check_type_map"]) == "ignore")
+    if len(ignored):
+        log.info("Ignored (not counted as in or out):\n%s", ignored)
     weight = weight_expr(events, cfg["count_mode"], cfg["person_type_codes"])
     start_time, end_time = resolve_bounds(events, cfg["start_time"], cfg["end_time"], interval)
 

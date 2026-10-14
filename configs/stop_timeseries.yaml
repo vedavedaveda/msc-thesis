@@ -4,13 +4,19 @@ year: 2017                    # reads the cleaned dataset for this year
 gtfs_stops_path: /mnt/raid/data_sortedmob/RKD/gtfs_dk_2021/stops.txt   # adjust together with `year`
 interval_minutes: 30          # positive integer dividing 1440; 30 matches the paper's Citi Bike pick-drop
 count_mode: passengers        # transactions = event rows; passengers = sum of PassagerAntal for person_type_codes
-# `Model` code -> check type. Confirm these meanings for your source before setting
-# check_type_map_confirmed: true; add other codes (e.g. Cc) only after checking them.
-# Transfer check-ins (Tr) count as check-ins; no intermediate check-out is inferred.
+# `Model` code -> in | out | ignore (ignore = known code, counted in neither channel).
+# Code meanings (from the data owner):
+#   Fi first check-in | Su transfer check-in | Tr check-in after check-out (Co+Tr = Su)
+#   Co check-out      | Cc cancellation via check-out (no charge, counted as out) | Io unknown
+# No intermediate check-out is inferred for Su transfers; Co+Tr transfers do carry a Co.
+# Set check_type_map_confirmed: true once Io is decided (check its volume in the logged counts).
 check_type_map:
   Fi: in
+  Su: in
   Tr: in
   Co: out
+  Cc: out                     # cancelled trip: counted as a check-out so it balances its Fi
+  Io: ignore                  # meaning unknown; check its volume in the logged code counts
 check_type_map_confirmed: false
 person_type_codes: [1, 2, 4, 5, 7, 8, 9, 10, 18]   # only used when count_mode: passengers
 dense_output: true            # zero-fill every (interval, used stop); false = observed bins only

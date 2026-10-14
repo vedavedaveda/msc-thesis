@@ -44,7 +44,7 @@ def test_validate_config_rejects_bad_interval():
 
 def test_validate_config_rejects_bad_map_values():
     cfg = {"interval_minutes": 20, "count_mode": "transactions", "check_type_map": {"Fi": "enter"}}
-    with pytest.raises(ValueError, match="'in' or 'out'"):
+    with pytest.raises(ValueError, match="'in', 'out' or 'ignore'"):
         validate_config(cfg)
 
 
@@ -76,6 +76,20 @@ def test_bins_are_left_closed_and_sum_in_and_out():
     assert (second["time_idx"], second["check_ins"], second["check_outs"]) == (
         pd.Timestamp("2017-01-01 08:20"), 1, 0,
     )
+
+
+def test_ignored_codes_count_in_neither_channel_and_create_no_bins():
+    events = _events([
+        _row("2017-01-01 08:00", 1, "Fi"),
+        _row("2017-01-01 08:05", 1, "Cc"),
+        _row("2017-01-01 09:00", 2, "Cc"),  # stop 2 only ever sees ignored events
+    ])
+    cmap = {**CHECK_MAP, "Cc": "ignore"}
+    start, end = resolve_bounds(events, None, None, 20)
+    binned = bin_events(events, weight_expr(events, "transactions", []), cmap, 20, start, end)
+    assert binned[["stop_id", "check_ins", "check_outs"]].to_dict("records") == [
+        {"stop_id": "1", "check_ins": 1, "check_outs": 0}
+    ]
 
 
 def test_passenger_weight_only_counts_configured_person_types():
