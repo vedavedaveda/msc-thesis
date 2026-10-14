@@ -1,7 +1,8 @@
 # Config for the stop time-series dataset (see data/rejsekort/stop_timeseries.py).
 # Target: check-ins and check-outs per Rejsekort stop per time step, plus stop locations.
 year: 2017                    # reads the cleaned dataset for this year
-gtfs_stops_path: /mnt/raid/data_sortedmob/RKD/gtfs_dk_2021/stops.txt   # adjust together with `year`
+# Optional: stop coordinates, not used by the zero-shot experiment. null = skip stop_locations.parquet.
+gtfs_stops_path: null         # e.g. /mnt/raid/data_sortedmob/RKD/gtfs_dk_2021/stops.txt (match `year`)
 interval_minutes: 30          # positive integer dividing 1440; 30 matches the paper's Citi Bike pick-drop
 count_mode: passengers        # transactions = event rows; passengers = sum of PassagerAntal for person_type_codes
 # `Model` code -> in | out | ignore (ignore = known code, counted in neither channel).

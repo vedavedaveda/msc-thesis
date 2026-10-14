@@ -6,7 +6,7 @@ two linked parquet files to data/processed/stop_timeseries/<year>/:
 
     stop_timeseries.parquet
         time_idx, stop_id, check_ins, check_outs
-    stop_locations.parquet
+    stop_locations.parquet            (only when `gtfs_stops_path` is set)
         stop_id, stop_name, latitude, longitude
 
 Raw events stay lazy; only the aggregated bins are collected. The dense output is
@@ -281,7 +281,8 @@ def build_stop_timeseries(cfg: Config, input_path: Path | None = None) -> Path:
     stop_ids = sorted(binned["stop_id"].unique())
     log.info("%d stops, %d observed bins; count mode: %s", len(stop_ids), len(binned), cfg["count_mode"])
 
-    stop_locations = build_stop_locations(stop_ids, Path(cfg["gtfs_stops_path"]))
+    gtfs_stops_path = cfg.get("gtfs_stops_path")
+    stop_locations = build_stop_locations(stop_ids, Path(gtfs_stops_path)) if gtfs_stops_path else None
 
     out_dir = stop_timeseries_dir(year)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -290,9 +291,13 @@ def build_stop_timeseries(cfg: Config, input_path: Path | None = None) -> Path:
     rows, totals = write_timeseries(
         binned, stop_ids, start_time, end_time, interval, cfg["dense_output"], timeseries_path
     )
-    stop_locations.to_parquet(locations_path, index=False, compression="zstd")
     log.info("Wrote %d time-series rows to %s", rows, timeseries_path)
-    log.info("Wrote %d stop locations to %s", len(stop_locations), locations_path)
+    if stop_locations is not None:
+        stop_locations.to_parquet(locations_path, index=False, compression="zstd")
+        log.info("Wrote %d stop locations to %s", len(stop_locations), locations_path)
+    else:
+        locations_path.unlink(missing_ok=True)  # don't leave a stale file from an earlier run
+        log.info("No gtfs_stops_path set: skipping stop locations")
     log.info("Totals (%s): %s", cfg["count_mode"], totals)
     return out_dir
 

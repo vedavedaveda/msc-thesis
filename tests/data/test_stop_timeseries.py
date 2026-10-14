@@ -5,6 +5,7 @@ import polars as pl
 import pyarrow.parquet as pq
 import pytest
 
+from msc_thesis.data.rejsekort import stop_timeseries
 from msc_thesis.data.rejsekort.stop_timeseries import (
     bin_events,
     build_stop_locations,
@@ -160,3 +161,20 @@ def test_sparse_output_writes_only_observed_bins(tmp_path):
         binned, ["1"], pd.Timestamp("2017-01-01"), pd.Timestamp("2017-01-02"), 20, False, path
     )
     assert rows == 1
+
+
+def test_build_without_gtfs_skips_stop_locations(tmp_path, monkeypatch):
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    _events([_row("2017-01-01 08:00", 1, "Fi"), _row("2017-01-01 08:10", 2, "Co")]).collect().write_parquet(
+        clean / "part.parquet"
+    )
+    monkeypatch.setattr(stop_timeseries, "PROCESSED_DIR", tmp_path / "processed")
+    cfg = {
+        "year": 2017, "interval_minutes": 30, "count_mode": "transactions", "check_type_map": CHECK_MAP,
+        "check_type_map_confirmed": True, "person_type_codes": [], "dense_output": True,
+        "start_time": None, "end_time": None, "gtfs_stops_path": None,
+    }
+    out_dir = stop_timeseries.build_stop_timeseries(cfg, clean)
+    assert (out_dir / "stop_timeseries.parquet").exists()
+    assert not (out_dir / "stop_locations.parquet").exists()
